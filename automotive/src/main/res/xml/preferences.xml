@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <ListPreference
+        android:defaultValue="Direct stream"
+        android:entries="@array/bitrate"
+        android:entryValues="@array/bitrateValues"
+        android:key="bitrate"
+        android:summary="%s"
+        android:title="@string/max_bitrate" />
+
+    <ListPreference
+        android:defaultValue="200"
+        android:entries="@array/cacheSize"
+        android:entryValues="@array/cacheSizeValues"
+        android:key="cache_size"
+        android:summary="%s"
+        android:title="@string/cache_size" />
+
+    <Preference
+        android:key="version"
+        android:title="@string/app_version" />
+
+</PreferenceScreen>
