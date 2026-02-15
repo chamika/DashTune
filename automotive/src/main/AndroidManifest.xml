@@ -32,7 +32,7 @@
 
         <meta-data
             android:name="androidx.car.app.TintableAttributionIcon"
-            android:resource="@mipmap/ic_launcher" />
+            android:resource="@drawable/app_icon" />
 
         <!-- Sign-in Activity -->
         <activity
