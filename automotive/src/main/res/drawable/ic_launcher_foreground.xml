@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:pathData="M54,54m-32,0a32,32 0,1 1,64 0a32,32 0,1 1,-64 0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108"
+                android:type="linear">
+                <item android:offset="0" android:color="#FF1A2A44"/>
+                <item android:offset="1" android:color="#FF2E1A44"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Main circle ring with gradient (scaled to fit safe zone) -->
+    <path
+        android:pathData="M54,54m-32,0a32,32 0,1 1,64 0a32,32 0,1 1,-64 0"
+        android:strokeWidth="2.2"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="22"
+                android:startY="22"
+                android:endX="86"
+                android:endY="86"
+                android:type="linear">
+                <item android:offset="0" android:color="#FFFF9A44"/>
+                <item android:offset="1" android:color="#FF8A44FF"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Outer subtle ring -->
+    <path
+        android:pathData="M54,54m-34.5,0a34.5,34.5 0,1 1,69 0a34.5,34.5 0,1 1,-69 0"
+        android:strokeAlpha="0.1"
+        android:strokeWidth="0.4"
+        android:fillColor="#00000000"
+        android:strokeColor="#ffffff"/>
+
+    <!-- Left sound waves (scaled to fit) -->
+    <path
+        android:pathData="M29,44Q26,54 29,64"
+        android:strokeAlpha="0.6"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:strokeColor="#ffffff"
+        android:fillAlpha="0.6"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M33,47Q31,54 33,61"
+        android:strokeAlpha="0.8"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:strokeColor="#ffffff"
+        android:fillAlpha="0.8"
+        android:strokeLineCap="round"/>
+
+    <!-- Right sound waves (scaled to fit) -->
+    <path
+        android:pathData="M79,44Q82,54 79,64"
+        android:strokeAlpha="0.6"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:strokeColor="#ffffff"
+        android:fillAlpha="0.6"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M75,47Q77,54 75,61"
+        android:strokeAlpha="0.8"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:strokeColor="#ffffff"
+        android:fillAlpha="0.8"
+        android:strokeLineCap="round"/>
+
+    <!-- Music note (scaled and centered) -->
+    <path
+        android:pathData="M66,33L48,38V64C48,70 43,73 38,71.5C33,70 33,63.5 38,62C40.5,61 45,62 45,64V43L63,39V56C63,61 58,64 53,62.5C48,61 48,55 53,53.5C55.5,52.5 60,53.5 60,56Z"
+        android:fillColor="#ffffff"/>
+
+    <!-- Music note detail -->
+    <path
+        android:pathData="M55.5,53.5l0,5.5l4.5,-2.75z"
+        android:fillColor="#1a2a44"/>
+</vector>
