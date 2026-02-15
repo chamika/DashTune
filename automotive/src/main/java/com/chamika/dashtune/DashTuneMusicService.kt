@@ -120,6 +120,18 @@ class DashTuneMusicService : MediaLibraryService() {
                     // Prefetch next tracks
                     prefetchNextTracks(player)
                 }
+
+                if (events.contains(Player.EVENT_REPEAT_MODE_CHANGED)) {
+                    PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService).edit {
+                        putInt("repeat_mode", player.repeatMode)
+                    }
+                }
+
+                if (events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) {
+                    PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService).edit {
+                        putBoolean("shuffle_enabled", player.shuffleModeEnabled)
+                    }
+                }
             }
         }
 
@@ -129,8 +141,10 @@ class DashTuneMusicService : MediaLibraryService() {
             .build()
         player.addListener(playerListener)
 
-        player.repeatMode = Player.REPEAT_MODE_ALL
-        player.shuffleModeEnabled = false
+        // Restore saved shuffle and repeat states
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        player.repeatMode = prefs.getInt("repeat_mode", Player.REPEAT_MODE_ALL)
+        player.shuffleModeEnabled = prefs.getBoolean("shuffle_enabled", false)
 
         playbackPoll = Runnable {
             if (player.isPlaying) {
