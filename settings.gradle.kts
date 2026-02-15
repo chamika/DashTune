@@ -21,5 +21,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "DashTune"
 include(":automotive")
-include(":shared")
- 

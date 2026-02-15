@@ -1,4 +1,12 @@
 <resources>
-
-    <style name="Theme.DashTune" parent="android:Theme.Material.Light.DarkActionBar" />
+    <style name="Theme.DashTune" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/darkBackground</item>
+        <item name="android:textColorPrimary">@color/textLight</item>
+        <item name="android:textColorSecondary">@color/textLight</item>
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
+        <item name="android:textSize">24sp</item>
+        <item name="android:textColor">@color/textLight</item>
+    </style>
 </resources>
