@@ -52,6 +52,7 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.jellyfin.core)
     implementation(libs.okhttp)
+    implementation(libs.material)
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)
 
