@@ -1,21 +1,47 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ============================================
+# DashTune ProGuard/R8 Rules
+# ============================================
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# --- Crashlytics: preserve line numbers for readable stack traces ---
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# --- AccountAuthenticator (accessed by Android system via service binding) ---
+-keep class com.chamika.dashtune.auth.Authenticator { *; }
+-keep class com.chamika.dashtune.auth.AuthenticatorService { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# --- SLF4J (service loader discovery) ---
+-keep class org.slf4j.impl.** { *; }
+-keep class org.slf4j.LoggerFactory { *; }
+-dontwarn org.slf4j.spi.CallerBoundaryAware
+-dontwarn org.slf4j.spi.LoggingEventBuilder
+
+# --- Jellyfin SDK (kotlinx.serialization) ---
+-keepattributes *Annotation*
+-keep class org.jellyfin.sdk.model.api.** { *; }
+-keep class org.jellyfin.sdk.model.serializer.** { *; }
+
+# --- OkHttp ---
+-dontwarn okhttp3.internal.platform.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
+
+# --- Kotlin Serialization ---
+-keepattributes InnerClasses
+-keep,includedescriptorclasses class org.jellyfin.sdk.**$$serializer { *; }
+-keepclassmembers class org.jellyfin.sdk.** {
+    *** Companion;
+}
+-keepclasseswithmembers class org.jellyfin.sdk.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+
+# --- Ktor (used by Jellyfin SDK) ---
+-dontwarn io.ktor.**
+-keep class io.ktor.** { *; }
+
+# --- Guava (transitively used) ---
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.**
+-dontwarn org.checkerframework.**
