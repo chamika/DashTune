@@ -41,7 +41,20 @@
 -dontwarn io.ktor.**
 -keep class io.ktor.** { *; }
 
-# --- Guava (transitively used) ---
+# --- Hilt (DI reflection/code generation) ---
+-keep,allowobfuscation,allowshrinking class dagger.hilt.** { *; }
+-keep,allowobfuscation,allowshrinking class javax.inject.** { *; }
+-keep,allowobfuscation,allowshrinking class dagger.** { *; }
+-dontwarn dagger.hilt.internal.aggregatedroot.codegen.**
+
+# --- Media3 MediaLibraryService (system-bound service) ---
+-keep class com.chamika.dashtune.DashTuneMusicService { *; }
+
+# --- Kotlin Coroutines ---
+-dontwarn kotlinx.coroutines.**
+
+# --- Guava (LocalCache breaks under R8 optimization) ---
+-keep class com.google.common.cache.** { *; }
 -dontwarn com.google.errorprone.annotations.**
 -dontwarn javax.annotation.**
 -dontwarn org.checkerframework.**
