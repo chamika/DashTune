@@ -13,7 +13,7 @@ android {
     defaultConfig {
         applicationId = "com.chamika.dashtune"
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 7
         versionName = "0.7"
 
