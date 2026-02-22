@@ -1,6 +1,7 @@
 package com.chamika.dashtune
 
 import android.accounts.AccountManager
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -197,6 +198,21 @@ class DashTuneMusicService : MediaLibraryService() {
         }
 
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val player = mediaLibrarySession.player
+        if (player.playWhenReady || player.mediaItemCount > 0) {
+            Log.i(LOG_TAG, "onTaskRemoved: keeping service alive")
+        } else {
+            Log.i(LOG_TAG, "onTaskRemoved: stopping service")
+            stopSelf()
+        }
+    }
+
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        val shouldForeground = startInForegroundRequired || session.player.playWhenReady
+        super.onUpdateNotification(session, shouldForeground)
     }
 
     fun onLogin() {
