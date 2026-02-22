@@ -34,6 +34,11 @@ import dagger.hilt.android.AndroidEntryPoint
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.playStateApi
+import org.jellyfin.sdk.model.api.PlaybackStartInfo
+import org.jellyfin.sdk.model.api.PlaybackOrder
+import org.jellyfin.sdk.model.api.PlaybackStopInfo
+import org.jellyfin.sdk.model.api.PlayMethod
+import org.jellyfin.sdk.model.api.RepeatMode
 import org.jellyfin.sdk.model.serializer.toUUID
 import java.io.File
 import java.util.concurrent.Executors
@@ -275,9 +280,12 @@ class DashTuneMusicService : MediaLibraryService() {
     private suspend fun reportPlayback(player: Player) {
         if (currentTrack != null) {
             Log.i(LOG_TAG, "Reporting playback stopped: $currentPlaybackTime")
-            jellyfinApi.playStateApi.onPlaybackStopped(
-                currentTrack!!.mediaId.toUUID(),
-                positionTicks = 10000 * currentPlaybackTime
+            jellyfinApi.playStateApi.reportPlaybackStopped(
+                PlaybackStopInfo(
+                    itemId = currentTrack!!.mediaId.toUUID(),
+                    positionTicks = 10000 * currentPlaybackTime,
+                    failed = false
+                )
             )
         }
 
@@ -290,9 +298,16 @@ class DashTuneMusicService : MediaLibraryService() {
                 LOG_TAG,
                 "Playing $formatString: ${exoPlayer.currentMediaItem?.localConfiguration?.uri}"
             )
-            jellyfinApi.playStateApi.onPlaybackStart(
-                player.currentMediaItem!!.mediaId.toUUID(),
-                canSeek = true
+            jellyfinApi.playStateApi.reportPlaybackStart(
+                PlaybackStartInfo(
+                    itemId = player.currentMediaItem!!.mediaId.toUUID(),
+                    canSeek = true,
+                    isPaused = false,
+                    isMuted = false,
+                    playMethod = PlayMethod.DIRECT_PLAY,
+                    repeatMode = RepeatMode.REPEAT_NONE,
+                    playbackOrder = PlaybackOrder.DEFAULT
+                )
             )
         }
     }

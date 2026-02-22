@@ -12,7 +12,6 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Rating
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.common.util.Util
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_INTENT_COMPAT
 import androidx.media3.session.MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_LABEL_COMPAT
@@ -140,7 +139,7 @@ class DashTuneSessionCallback(
 
             val signInIntent = Intent(service, SignInActivity::class.java)
 
-            val flags = if (Util.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
+            val flags = PendingIntent.FLAG_IMMUTABLE
             it.putParcelable(
                 EXTRAS_KEY_ERROR_RESOLUTION_ACTION_INTENT_COMPAT,
                 PendingIntent.getActivity(service, 0, signInIntent, flags)

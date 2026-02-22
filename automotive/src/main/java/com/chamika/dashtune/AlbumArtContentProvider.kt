@@ -67,9 +67,9 @@ class AlbumArtContentProvider : ContentProvider() {
 
         Log.d(LOG_TAG, "Downloading $remoteUri ...")
         client.newCall(request).execute().use {
-            if (it.body != null && it.code == 200) {
+            if (it.code == 200) {
                 Log.d(LOG_TAG, "Downloaded $remoteUri")
-                val source = it.body!!.source()
+                val source = it.body.source()
                 source.request(Long.MAX_VALUE)
 
                 val sink = tmpFile.sink().buffer()
