@@ -88,7 +88,7 @@ class DashTuneSessionCallback(
         Log.i(LOG_TAG, "onGetRoot")
 
         if (!::tree.isInitialized) {
-            val artSize = params?.extras?.getInt(EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS) ?: 512
+            val artSize = params?.extras?.getInt(EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS) ?: 1024
             Log.d(LOG_TAG, "Art size hint from system: $artSize")
 
             val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)

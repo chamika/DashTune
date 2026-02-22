@@ -42,7 +42,8 @@ class AlbumArtContentProvider : ContentProvider() {
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
         val context = this.context ?: return null
         val remoteUri = uriMap[uri] ?: throw FileNotFoundException(uri.path)
-        val file = File(context.cacheDir, uri.path ?: throw FileNotFoundException("null path"))
+        val path = uri.path?.removePrefix("/") ?: throw FileNotFoundException("null path")
+        val file = File(context.cacheDir, path)
 
         if (file.exists()) {
             Log.d(LOG_TAG, "Returning existing file for $remoteUri: $file")

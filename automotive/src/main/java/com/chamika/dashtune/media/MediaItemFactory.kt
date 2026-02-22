@@ -207,7 +207,8 @@ class MediaItemFactory(
         group: String? = null,
         parent: String? = null
     ): MediaItem {
-        val artUrl = artUri(item.albumId ?: item.id)
+        val hasOwnImage = item.imageTags?.containsKey(ImageType.PRIMARY) == true
+        val artUrl = artUri(if (hasOwnImage) item.id else (item.albumId ?: item.id))
 
         val preferenceBitrate = PreferenceManager
             .getDefaultSharedPreferences(context)
