@@ -124,7 +124,12 @@ class DashTuneMusicService : MediaLibraryService() {
                     SuspendToFutureAdapter.launchFuture { reportPlayback(player) }
 
                     // Prefetch next tracks
-                    prefetchNextTracks(player)
+                    val prefetchCount = PreferenceManager
+                        .getDefaultSharedPreferences(this@DashTuneMusicService)
+                        .getString("prefetch_count", "5")?.toIntOrNull() ?: 5
+                    if (prefetchCount > 0) {
+                        prefetchNextTracks(player, prefetchCount)
+                    }
                 }
 
                 if (events.contains(Player.EVENT_REPEAT_MODE_CHANGED)) {

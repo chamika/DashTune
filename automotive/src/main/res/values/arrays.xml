@@ -33,4 +33,22 @@
         <item>1024</item>
         <item>2048</item>
     </string-array>
+
+    <string-array name="prefetchCount">
+        <item>Off</item>
+        <item>3 songs</item>
+        <item>5 songs</item>
+        <item>10 songs</item>
+        <item>15 songs</item>
+        <item>20 songs</item>
+    </string-array>
+
+    <string-array name="prefetchCountValues">
+        <item>0</item>
+        <item>3</item>
+        <item>5</item>
+        <item>10</item>
+        <item>15</item>
+        <item>20</item>
+    </string-array>
 </resources>

@@ -17,6 +17,14 @@
         android:summary="%s"
         android:title="@string/cache_size" />
 
+    <ListPreference
+        android:defaultValue="5"
+        android:entries="@array/prefetchCount"
+        android:entryValues="@array/prefetchCountValues"
+        android:key="prefetch_count"
+        android:summary="%s"
+        android:title="@string/prefetch_count" />
+
     <Preference
         android:key="version"
         android:title="@string/app_version" />
