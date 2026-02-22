@@ -80,6 +80,16 @@ class DashTuneSessionCallback(
         )
     }
 
+    private fun ensureTreeInitialized(artSizeHint: Int? = null) {
+        if (!::tree.isInitialized) {
+            val artSize = artSizeHint ?: 1024
+            Log.d(LOG_TAG, "Initializing media tree with art size: $artSize")
+
+            val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
+            tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
+        }
+    }
+
     override fun onGetLibraryRoot(
         session: MediaLibraryService.MediaLibrarySession,
         browser: MediaSession.ControllerInfo,
@@ -87,13 +97,8 @@ class DashTuneSessionCallback(
     ): ListenableFuture<LibraryResult<MediaItem>> {
         Log.i(LOG_TAG, "onGetRoot")
 
-        if (!::tree.isInitialized) {
-            val artSize = params?.extras?.getInt(EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS) ?: 1024
-            Log.d(LOG_TAG, "Art size hint from system: $artSize")
-
-            val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
-            tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
-        }
+        val artSize = params?.extras?.getInt(EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS)
+        ensureTreeInitialized(artSize)
 
         return SuspendToFutureAdapter.launchFuture {
             LibraryResult.ofItem(
@@ -275,8 +280,12 @@ class DashTuneSessionCallback(
 
     override fun onPlaybackResumption(
         mediaSession: MediaSession,
-        controller: MediaSession.ControllerInfo
+        controller: MediaSession.ControllerInfo,
+        isForPlayback: Boolean
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+        Log.i(LOG_TAG, "onPlaybackResumption")
+        ensureTreeInitialized()
+
         return SuspendToFutureAdapter.launchFuture {
             val prefs = PreferenceManager.getDefaultSharedPreferences(service)
 
