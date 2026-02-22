@@ -10,7 +10,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ProgressBar
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Observer
@@ -26,6 +25,7 @@ class CredentialsFragment : Fragment() {
     private lateinit var usernameInput: EditText
     private lateinit var passwordInput: EditText
     private lateinit var loginButton: Button
+    private lateinit var errorText: TextView
 
     private lateinit var quickConnectCode: TextView
     private lateinit var quickConnectProgressBar: ProgressBar
@@ -46,6 +46,7 @@ class CredentialsFragment : Fragment() {
         usernameInput = view.findViewById(R.id.username)
         passwordInput = view.findViewById(R.id.password)
         loginButton = view.findViewById(R.id.login_button)
+        errorText = view.findViewById(R.id.error_text)
         quickConnectCode = view.findViewById(R.id.quickconnect_code)
         quickConnectProgressBar = view.findViewById(R.id.quickconnect_progressbar)
 
@@ -70,14 +71,18 @@ class CredentialsFragment : Fragment() {
             val username = usernameInput.text
             val password = passwordInput.text
 
+            errorText.visibility = View.GONE
+
             if (TextUtils.isEmpty(username)) {
-                toast(R.string.username_textfield_error)
+                errorText.setText(R.string.username_textfield_error)
+                errorText.visibility = View.VISIBLE
             } else {
                 viewLifecycleOwner.lifecycleScope.launch {
                     val result = viewModel.login(server, username.toString(), password.toString())
 
                     if (!result) {
-                        toast(R.string.login_unsuccessful)
+                        errorText.setText(R.string.login_unsuccessful)
+                        errorText.visibility = View.VISIBLE
                     }
 
                     val inputManager =
@@ -91,7 +96,4 @@ class CredentialsFragment : Fragment() {
         }
     }
 
-    private fun toast(message: Int) {
-        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-    }
 }
