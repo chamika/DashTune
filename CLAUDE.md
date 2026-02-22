@@ -102,6 +102,7 @@ automotive/src/main/java/com/chamika/dashtune/
 |---------|-----|---------|---------|
 | Bitrate | `bitrate` | Direct stream | Direct stream, 320k, 256k, 192k, 160k, 128k |
 | Cache Size | `cache_size` | 200 MB | 100, 200, 500, 1024, 2048 MB |
+| Offline Song Count | `prefetch_count` | 5 | Off (0), 3, 5, 10, 15, 20 |
 
 ## Manifest Components
 - **DashTuneMusicService**: `foregroundServiceType="mediaPlayback"`, intent filters for Media3 + legacy MediaBrowserService
