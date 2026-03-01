@@ -6,6 +6,7 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.chamika.dashtune.Constants.LOG_TAG
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.chamika.dashtune.auth.JellyfinAccountManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +49,7 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             response.status == 200
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Error", e)
+            FirebaseCrashlytics.getInstance().recordException(e)
             false
         }
     }
@@ -123,6 +125,7 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             response.status == 200
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error", e)
+            FirebaseCrashlytics.getInstance().recordException(e)
             false
         }
     }

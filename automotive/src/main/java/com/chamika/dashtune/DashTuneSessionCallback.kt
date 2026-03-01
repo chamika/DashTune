@@ -25,6 +25,7 @@ import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import androidx.preference.PreferenceManager
 import com.chamika.dashtune.Constants.LOG_TAG
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.chamika.dashtune.auth.JellyfinAccountManager
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
@@ -108,6 +109,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get library root", e)
+                FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, ""))
             }
         }
@@ -140,6 +142,7 @@ class DashTuneSessionCallback(
                 LibraryResult.ofItemList(tree.getChildren(parentId), params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get children for $parentId", e)
+                FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media items"))
             }
         }
@@ -181,6 +184,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get item $mediaId", e)
+                FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media item"))
             }
         }
@@ -279,6 +283,7 @@ class DashTuneSessionCallback(
                 LibraryResult.ofVoid(params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to search for '$query'", e)
+                FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofVoid()
             }
         }
@@ -298,6 +303,7 @@ class DashTuneSessionCallback(
                 LibraryResult.ofItemList(results, params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
+                FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofItemList(emptyList(), params)
             }
         }
@@ -331,6 +337,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to resume playback", e)
+                FirebaseCrashlytics.getInstance().recordException(e)
                 MediaSession.MediaItemsWithStartPosition(
                     emptyList(),
                     0,
@@ -391,6 +398,7 @@ class DashTuneSessionCallback(
                 SessionResult(SessionResult.RESULT_SUCCESS)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to set rating for $mediaId", e)
+                FirebaseCrashlytics.getInstance().recordException(e)
                 SessionResult(SessionError.ERROR_UNKNOWN)
             }
         }

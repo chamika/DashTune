@@ -27,6 +27,7 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.preference.PreferenceManager
 import com.chamika.dashtune.Constants.LOG_TAG
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_INDEX_PREF
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TRACK_POSITON_MS_PREF
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
@@ -278,6 +279,7 @@ class DashTuneMusicService : MediaLibraryService() {
                 downloadManager.resumeDownloads()
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "Failed to prefetch: $id", e)
+                FirebaseCrashlytics.getInstance().recordException(e)
             }
         }
     }
