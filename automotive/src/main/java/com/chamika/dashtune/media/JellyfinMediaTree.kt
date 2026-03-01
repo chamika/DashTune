@@ -1,9 +1,11 @@
 package com.chamika.dashtune.media
 
 import android.content.Context
+import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_ARTIST
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_PLAYLIST
+import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.R
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
@@ -12,6 +14,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.google.common.cache.Cache
 import com.google.common.cache.CacheBuilder
+import kotlinx.coroutines.delay
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.artistsApi
 import org.jellyfin.sdk.api.client.extensions.itemsApi
@@ -22,6 +25,8 @@ import org.jellyfin.sdk.model.api.ItemFilter
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.SortOrder
 import org.jellyfin.sdk.model.serializer.toUUID
+import java.net.ConnectException
+import java.util.concurrent.TimeoutException
 
 private const val MAX_ITEMS = 120
 
@@ -35,6 +40,32 @@ class JellyfinMediaTree(
         .maximumSize(1000)
         .build()
 
+    private suspend fun <T> retryOnFailure(
+        maxRetries: Int = 2,
+        block: suspend () -> T
+    ): T {
+        var lastException: Exception? = null
+        repeat(maxRetries + 1) { attempt ->
+            try {
+                return block()
+            } catch (e: Exception) {
+                if (e is TimeoutException || e is ConnectException ||
+                    e.cause is TimeoutException || e.cause is ConnectException
+                ) {
+                    lastException = e
+                    if (attempt < maxRetries) {
+                        val delayMs = 1000L * (attempt + 1)
+                        Log.w(LOG_TAG, "Retry ${attempt + 1}/$maxRetries after ${delayMs}ms", e)
+                        delay(delayMs)
+                    }
+                } else {
+                    throw e
+                }
+            }
+        }
+        throw lastException!!
+    }
+
     suspend fun getItem(id: String): MediaItem {
         if (mediaItems.getIfPresent(id) == null) {
             val newItem = when (id) {
@@ -43,7 +74,7 @@ class JellyfinMediaTree(
                 RANDOM_ALBUMS -> itemFactory.randomAlbums()
                 FAVOURITES -> itemFactory.favourites()
                 PLAYLISTS -> itemFactory.playlists()
-                else -> {
+                else -> retryOnFailure {
                     val response = api.userLibraryApi.getItem(id.toUUID())
                     itemFactory.create(response.content)
                 }
@@ -72,20 +103,20 @@ class JellyfinMediaTree(
         }
     }
 
-    private suspend fun getLatestAlbums(): List<MediaItem> {
+    private suspend fun getLatestAlbums(): List<MediaItem> = retryOnFailure {
         val response = api.userLibraryApi.getLatestMedia(
             includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
             limit = MAX_ITEMS
         )
 
-        return response.content.map {
+        response.content.map {
             val item = itemFactory.create(it)
             mediaItems.put(item.mediaId, item)
             item
         }
     }
 
-    private suspend fun getRandomAlbums(): List<MediaItem> {
+    private suspend fun getRandomAlbums(): List<MediaItem> = retryOnFailure {
         val response = api.itemsApi.getItems(
             includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
             recursive = true,
@@ -93,14 +124,14 @@ class JellyfinMediaTree(
             limit = MAX_ITEMS
         )
 
-        return response.content.items.map {
+        response.content.items.map {
             val item = itemFactory.create(it)
             mediaItems.put(item.mediaId, item)
             item
         }
     }
 
-    private suspend fun getPlaylists(): List<MediaItem> {
+    private suspend fun getPlaylists(): List<MediaItem> = retryOnFailure {
         val response = api.itemsApi.getItems(
             includeItemTypes = listOf(BaseItemKind.PLAYLIST),
             recursive = true,
@@ -109,7 +140,7 @@ class JellyfinMediaTree(
             limit = MAX_ITEMS
         )
 
-        return response.content.items.map {
+        response.content.items.map {
             val item = itemFactory.create(it)
             mediaItems.put(item.mediaId, item)
             item
@@ -131,19 +162,21 @@ class JellyfinMediaTree(
             sortBy = listOf(ItemSortBy.DEFAULT)
         }
 
-        val response = api.itemsApi.getItems(
-            sortBy = sortBy,
-            parentId = id.toUUID()
-        )
+        return retryOnFailure {
+            val response = api.itemsApi.getItems(
+                sortBy = sortBy,
+                parentId = id.toUUID()
+            )
 
-        return response.content.items.map {
-            val item = itemFactory.create(it, parent = id)
-            mediaItems.put(item.mediaId, item)
-            item
+            response.content.items.map {
+                val item = itemFactory.create(it, parent = id)
+                mediaItems.put(item.mediaId, item)
+                item
+            }
         }
     }
 
-    private suspend fun getArtistAlbums(id: String): List<MediaItem> {
+    private suspend fun getArtistAlbums(id: String): List<MediaItem> = retryOnFailure {
         val response = api.itemsApi.getItems(
             sortBy = listOf(
                 ItemSortBy.PARENT_INDEX_NUMBER,
@@ -155,14 +188,14 @@ class JellyfinMediaTree(
             albumArtistIds = listOf(id.toUUID()),
         )
 
-        return response.content.items.map {
+        response.content.items.map {
             val item = itemFactory.create(it)
             mediaItems.put(item.mediaId, item)
             item
         }
     }
 
-    private suspend fun getFavourite(): List<MediaItem> {
+    private suspend fun getFavourite(): List<MediaItem> = retryOnFailure {
         val response = api.itemsApi.getItems(
             recursive = true,
             filters = listOf(ItemFilter.IS_FAVORITE),
@@ -173,7 +206,7 @@ class JellyfinMediaTree(
             )
         )
 
-        return response.content.items.map {
+        response.content.items.map {
             val item = itemFactory.create(
                 it,
                 groupForItem(it),
@@ -193,7 +226,7 @@ class JellyfinMediaTree(
                 context.getString(R.string.tracks)
             )
 
-    suspend fun search(query: String): List<MediaItem> {
+    suspend fun search(query: String): List<MediaItem> = retryOnFailure {
         val items = mutableListOf<MediaItem>()
 
         var response = api.artistsApi.getAlbumArtists(
@@ -246,6 +279,6 @@ class JellyfinMediaTree(
             item
         })
 
-        return items
+        items
     }
 }

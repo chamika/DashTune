@@ -101,10 +101,15 @@ class DashTuneSessionCallback(
         ensureTreeInitialized(artSize)
 
         return SuspendToFutureAdapter.launchFuture {
-            LibraryResult.ofItem(
-                tree.getItem(ROOT_ID),
-                params
-            )
+            try {
+                LibraryResult.ofItem(
+                    tree.getItem(ROOT_ID),
+                    params
+                )
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to get library root", e)
+                LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, ""))
+            }
         }
     }
 
@@ -131,7 +136,12 @@ class DashTuneSessionCallback(
         }
 
         return SuspendToFutureAdapter.launchFuture {
-            LibraryResult.ofItemList(tree.getChildren(parentId), params)
+            try {
+                LibraryResult.ofItemList(tree.getChildren(parentId), params)
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to get children for $parentId", e)
+                LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media items"))
+            }
         }
     }
 
@@ -164,10 +174,15 @@ class DashTuneSessionCallback(
     ): ListenableFuture<LibraryResult<MediaItem>> {
         Log.i(LOG_TAG, "onGetItem $mediaId")
         return SuspendToFutureAdapter.launchFuture {
-            LibraryResult.ofItem(
-                tree.getItem(mediaId),
-                null
-            )
+            try {
+                LibraryResult.ofItem(
+                    tree.getItem(mediaId),
+                    null
+                )
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to get item $mediaId", e)
+                LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media item"))
+            }
         }
     }
 
@@ -258,9 +273,14 @@ class DashTuneSessionCallback(
         params: MediaLibraryService.LibraryParams?
     ): ListenableFuture<LibraryResult<Void>> {
         return SuspendToFutureAdapter.launchFuture {
-            val results = tree.search(query).size
-            session.notifySearchResultChanged(browser, query, results, params)
-            LibraryResult.ofVoid(params)
+            try {
+                val results = tree.search(query).size
+                session.notifySearchResultChanged(browser, query, results, params)
+                LibraryResult.ofVoid(params)
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to search for '$query'", e)
+                LibraryResult.ofVoid()
+            }
         }
     }
 
@@ -273,8 +293,13 @@ class DashTuneSessionCallback(
         params: MediaLibraryService.LibraryParams?
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
         return SuspendToFutureAdapter.launchFuture {
-            val results = tree.search(query)
-            LibraryResult.ofItemList(results, params)
+            try {
+                val results = tree.search(query)
+                LibraryResult.ofItemList(results, params)
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
+                LibraryResult.ofItemList(emptyList(), params)
+            }
         }
     }
 
@@ -287,22 +312,31 @@ class DashTuneSessionCallback(
         ensureTreeInitialized()
 
         return SuspendToFutureAdapter.launchFuture {
-            val prefs = PreferenceManager.getDefaultSharedPreferences(service)
+            try {
+                val prefs = PreferenceManager.getDefaultSharedPreferences(service)
 
-            val mediaItemsToRestore = prefs
-                .getString(PLAYLIST_IDS_PREF, "")
-                ?.split(",")
-                ?.filter { it.isNotEmpty() }
-                ?.map { async { tree.getItem(it) } }
-                ?.awaitAll() ?: listOf()
+                val mediaItemsToRestore = prefs
+                    .getString(PLAYLIST_IDS_PREF, "")
+                    ?.split(",")
+                    ?.filter { it.isNotEmpty() }
+                    ?.map { async { tree.getItem(it) } }
+                    ?.awaitAll() ?: listOf()
 
-            Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
+                Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
 
-            MediaSession.MediaItemsWithStartPosition(
-                mediaItemsToRestore,
-                prefs.getInt(PLAYLIST_INDEX_PREF, 0),
-                prefs.getLong(PLAYLIST_TRACK_POSITON_MS_PREF, 0),
-            )
+                MediaSession.MediaItemsWithStartPosition(
+                    mediaItemsToRestore,
+                    prefs.getInt(PLAYLIST_INDEX_PREF, 0),
+                    prefs.getLong(PLAYLIST_TRACK_POSITON_MS_PREF, 0),
+                )
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to resume playback", e)
+                MediaSession.MediaItemsWithStartPosition(
+                    emptyList(),
+                    0,
+                    0L
+                )
+            }
         }
     }
 
@@ -352,8 +386,13 @@ class DashTuneSessionCallback(
         }
 
         return SuspendToFutureAdapter.launchFuture {
-            applyRating(mediaId, rating)
-            SessionResult(SessionResult.RESULT_SUCCESS)
+            try {
+                applyRating(mediaId, rating)
+                SessionResult(SessionResult.RESULT_SUCCESS)
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to set rating for $mediaId", e)
+                SessionResult(SessionError.ERROR_UNKNOWN)
+            }
         }
     }
 
