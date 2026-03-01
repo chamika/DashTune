@@ -133,6 +133,14 @@ class DashTuneMusicService : MediaLibraryService() {
                     }
                 }
 
+                if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
+                    if (player.isPlaying) {
+                        startPlaybackPoll()
+                    } else {
+                        stopPlaybackPoll()
+                    }
+                }
+
                 if (events.contains(Player.EVENT_REPEAT_MODE_CHANGED)) {
                     PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService).edit {
                         putInt("repeat_mode", player.repeatMode)
@@ -159,18 +167,17 @@ class DashTuneMusicService : MediaLibraryService() {
         player.shuffleModeEnabled = prefs.getBoolean("shuffle_enabled", false)
 
         playbackPoll = Runnable {
-            if (player.isPlaying) {
-                currentPlaybackTime = player.currentPosition
-                currentTrack = player.currentMediaItem
+            val p = mediaLibrarySession.player
+            if (p.isPlaying) {
+                currentPlaybackTime = p.currentPosition
+                currentTrack = p.currentMediaItem
 
                 PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService).edit {
                     putLong(PLAYLIST_TRACK_POSITON_MS_PREF, currentPlaybackTime)
                 }
+                handler.postDelayed(playbackPoll, 1000)
             }
-
-            handler.postDelayed(playbackPoll, 1000)
         }
-        handler.postDelayed(playbackPoll, 1000)
 
         callback = DashTuneSessionCallback(this, accountManager, jellyfinApi)
 
@@ -181,6 +188,15 @@ class DashTuneMusicService : MediaLibraryService() {
         if (accountManager.isAuthenticated) {
             onLogin()
         }
+    }
+
+    private fun startPlaybackPoll() {
+        handler.removeCallbacks(playbackPoll)
+        handler.post(playbackPoll)
+    }
+
+    private fun stopPlaybackPoll() {
+        handler.removeCallbacks(playbackPoll)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession {
@@ -213,17 +229,17 @@ class DashTuneMusicService : MediaLibraryService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = mediaLibrarySession.player
-        if (player.playWhenReady || player.mediaItemCount > 0) {
-            Log.i(LOG_TAG, "onTaskRemoved: keeping service alive")
+        if (player.playWhenReady && player.playbackState != Player.STATE_ENDED) {
+            Log.i(LOG_TAG, "onTaskRemoved: keeping service alive (actively playing)")
         } else {
             Log.i(LOG_TAG, "onTaskRemoved: stopping service")
+            player.pause()
             stopSelf()
         }
     }
 
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
-        val shouldForeground = startInForegroundRequired || session.player.playWhenReady
-        super.onUpdateNotification(session, shouldForeground)
+        super.onUpdateNotification(session, startInForegroundRequired)
     }
 
     fun onLogin() {
