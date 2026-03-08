@@ -24,4 +24,5 @@
     <string name="cache_size">Offline cache size</string>
     <string name="prefetch_count">Offline song count</string>
     <string name="app_version">App version</string>
+    <string name="library_synced">Library synced</string>
 </resources>

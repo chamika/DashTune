@@ -27,6 +27,8 @@ import androidx.preference.PreferenceManager
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.chamika.dashtune.auth.JellyfinAccountManager
+import com.chamika.dashtune.data.MediaRepository
+import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
@@ -45,20 +47,22 @@ import org.jellyfin.sdk.model.serializer.toUUID
 class DashTuneSessionCallback(
     private val service: DashTuneMusicService,
     private val accountManager: JellyfinAccountManager,
-    private val jellyfinApi: ApiClient
+    private val jellyfinApi: ApiClient,
+    private val mediaCacheDao: MediaCacheDao
 ) : MediaLibraryService.MediaLibrarySession.Callback {
 
     companion object {
         const val LOGIN_COMMAND = "com.chamika.dashtune.COMMAND.LOGIN"
         const val REPEAT_COMMAND = "com.chamika.dashtune.COMMAND.REPEAT"
         const val SHUFFLE_COMMAND = "com.chamika.dashtune.COMMAND.SHUFFLE"
+        const val SYNC_COMMAND = "com.chamika.dashtune.COMMAND.SYNC"
 
         const val PLAYLIST_IDS_PREF = "playlistIds"
         const val PLAYLIST_INDEX_PREF = "playlistIndex"
         const val PLAYLIST_TRACK_POSITON_MS_PREF = "playlistTrackPositionMs"
     }
 
-    private lateinit var tree: JellyfinMediaTree
+    private lateinit var repository: MediaRepository
 
     override fun onConnect(
         session: MediaSession,
@@ -73,6 +77,7 @@ class DashTuneSessionCallback(
             .add(SessionCommand(LOGIN_COMMAND, Bundle()))
             .add(SessionCommand(REPEAT_COMMAND, Bundle()))
             .add(SessionCommand(SHUFFLE_COMMAND, Bundle()))
+            .add(SessionCommand(SYNC_COMMAND, Bundle()))
             .build()
 
         return ConnectionResult.accept(
@@ -82,12 +87,13 @@ class DashTuneSessionCallback(
     }
 
     private fun ensureTreeInitialized(artSizeHint: Int? = null) {
-        if (!::tree.isInitialized) {
+        if (!::repository.isInitialized) {
             val artSize = artSizeHint ?: 1024
             Log.d(LOG_TAG, "Initializing media tree with art size: $artSize")
 
             val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
-            tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
+            val tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
+            repository = MediaRepository(service, mediaCacheDao, tree, itemFactory)
         }
     }
 
@@ -104,7 +110,7 @@ class DashTuneSessionCallback(
         return SuspendToFutureAdapter.launchFuture {
             try {
                 LibraryResult.ofItem(
-                    tree.getItem(ROOT_ID),
+                    repository.getItem(ROOT_ID),
                     params
                 )
             } catch (e: Exception) {
@@ -139,7 +145,7 @@ class DashTuneSessionCallback(
 
         return SuspendToFutureAdapter.launchFuture {
             try {
-                LibraryResult.ofItemList(tree.getChildren(parentId), params)
+                LibraryResult.ofItemList(repository.getChildren(parentId), params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get children for $parentId", e)
                 FirebaseCrashlytics.getInstance().recordException(e)
@@ -179,7 +185,7 @@ class DashTuneSessionCallback(
         return SuspendToFutureAdapter.launchFuture {
             try {
                 LibraryResult.ofItem(
-                    tree.getItem(mediaId),
+                    repository.getItem(mediaId),
                     null
                 )
             } catch (e: Exception) {
@@ -243,23 +249,23 @@ class DashTuneSessionCallback(
 
     private suspend fun isSingleItemWithParent(mediaItems: List<MediaItem>): Boolean {
         return mediaItems.size == 1 &&
-                tree.getItem(mediaItems[0].mediaId).mediaMetadata.extras?.containsKey(PARENT_KEY) == true
+                repository.getItem(mediaItems[0].mediaId).mediaMetadata.extras?.containsKey(PARENT_KEY) == true
     }
 
     private suspend fun expandSingleItem(item: MediaItem): List<MediaItem> {
-        val parentId = tree.getItem(item.mediaId).mediaMetadata.extras?.getString(PARENT_KEY)!!
-        return resolveMediaItems(tree.getChildren(parentId))
+        val parentId = repository.getItem(item.mediaId).mediaMetadata.extras?.getString(PARENT_KEY)!!
+        return resolveMediaItems(repository.getChildren(parentId))
     }
 
     private suspend fun resolveMediaItems(mediaItems: List<MediaItem>): List<MediaItem> {
         val playlist = mutableListOf<MediaItem>()
 
         mediaItems.forEach {
-            val item = tree.getItem(it.mediaId)
+            val item = repository.getItem(it.mediaId)
             if (item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_ALBUM ||
                 item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_PLAYLIST
             ) {
-                resolveMediaItems(tree.getChildren(item.mediaId)).forEach(playlist::add)
+                resolveMediaItems(repository.getChildren(item.mediaId)).forEach(playlist::add)
             } else if (item.mediaMetadata.isPlayable == true) {
                 playlist.add(item)
             } else {
@@ -278,7 +284,7 @@ class DashTuneSessionCallback(
     ): ListenableFuture<LibraryResult<Void>> {
         return SuspendToFutureAdapter.launchFuture {
             try {
-                val results = tree.search(query).size
+                val results = repository.search(query).size
                 session.notifySearchResultChanged(browser, query, results, params)
                 LibraryResult.ofVoid(params)
             } catch (e: Exception) {
@@ -299,7 +305,7 @@ class DashTuneSessionCallback(
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
         return SuspendToFutureAdapter.launchFuture {
             try {
-                val results = tree.search(query)
+                val results = repository.search(query)
                 LibraryResult.ofItemList(results, params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
@@ -325,7 +331,7 @@ class DashTuneSessionCallback(
                     .getString(PLAYLIST_IDS_PREF, "")
                     ?.split(",")
                     ?.filter { it.isNotEmpty() }
-                    ?.map { async { tree.getItem(it) } }
+                    ?.map { async { repository.getItem(it) } }
                     ?.awaitAll() ?: listOf()
 
                 Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
@@ -372,6 +378,20 @@ class DashTuneSessionCallback(
                 session.setMediaButtonPreferences(CommandButtons.createButtons(session.player))
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
             }
+
+            SYNC_COMMAND -> {
+                return SuspendToFutureAdapter.launchFuture {
+                    val success = repository.sync()
+                    if (success) {
+                        PreferenceManager.getDefaultSharedPreferences(service).edit {
+                            putLong("last_sync_timestamp", System.currentTimeMillis())
+                        }
+                        (session as MediaLibraryService.MediaLibrarySession).notifyChildrenChanged(ROOT_ID, 4, null)
+                        android.widget.Toast.makeText(service, R.string.library_synced, android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    SessionResult(SessionResult.RESULT_SUCCESS)
+                }
+            }
         }
 
         return super.onCustomCommand(session, controller, customCommand, args)
@@ -402,6 +422,11 @@ class DashTuneSessionCallback(
                 SessionResult(SessionError.ERROR_UNKNOWN)
             }
         }
+    }
+
+    suspend fun sync(): Boolean {
+        if (!::repository.isInitialized) return false
+        return repository.sync()
     }
 
     private suspend fun applyRating(currentMediaItem: String, newRating: Rating) {

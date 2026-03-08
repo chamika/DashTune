@@ -1,10 +1,16 @@
 package com.chamika.dashtune
 
 import android.accounts.AccountManager
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.concurrent.futures.SuspendToFutureAdapter
 import androidx.core.content.edit
@@ -30,8 +36,13 @@ import com.chamika.dashtune.Constants.LOG_TAG
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_INDEX_PREF
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TRACK_POSITON_MS_PREF
+import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.playStateApi
@@ -52,6 +63,9 @@ class DashTuneMusicService : MediaLibraryService() {
     @Inject
     lateinit var jellyfin: Jellyfin
 
+    @Inject
+    lateinit var mediaCacheDao: MediaCacheDao
+
     private lateinit var accountManager: com.chamika.dashtune.auth.JellyfinAccountManager
     private lateinit var jellyfinApi: ApiClient
     private lateinit var mediaSourceFactory: DefaultMediaSourceFactory
@@ -64,6 +78,10 @@ class DashTuneMusicService : MediaLibraryService() {
 
     private lateinit var playbackPoll: Runnable
     private lateinit var playerListener: Player.Listener
+
+    private lateinit var connectivityManager: ConnectivityManager
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     // Offline cache
     private lateinit var downloadCache: SimpleCache
@@ -179,7 +197,7 @@ class DashTuneMusicService : MediaLibraryService() {
             }
         }
 
-        callback = DashTuneSessionCallback(this, accountManager, jellyfinApi)
+        callback = DashTuneSessionCallback(this, accountManager, jellyfinApi, mediaCacheDao)
 
         mediaLibrarySession = MediaLibrarySession.Builder(this, player, callback)
             .setMediaButtonPreferences(CommandButtons.createButtons(player))
@@ -188,6 +206,39 @@ class DashTuneMusicService : MediaLibraryService() {
         if (accountManager.isAuthenticated) {
             onLogin()
         }
+
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val networkRequest = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.i(LOG_TAG, "Network available")
+                if (!accountManager.isAuthenticated) return
+
+                val prefs = PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService)
+                val lastSync = prefs.getLong("last_sync_timestamp", 0L)
+                val sixHoursMs = 6 * 60 * 60 * 1000L
+
+                if (System.currentTimeMillis() - lastSync > sixHoursMs) {
+                    serviceScope.launch {
+                        val success = callback.sync()
+                        if (success) {
+                            prefs.edit { putLong("last_sync_timestamp", System.currentTimeMillis()) }
+                            mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
+                            Toast.makeText(
+                                this@DashTuneMusicService,
+                                R.string.library_synced,
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+            }
+        }
+
+        connectivityManager.registerNetworkCallback(networkRequest, networkCallback!!)
     }
 
     private fun startPlaybackPoll() {
@@ -223,6 +274,8 @@ class DashTuneMusicService : MediaLibraryService() {
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Error releasing cache", e)
         }
+
+        networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
 
         super.onDestroy()
     }

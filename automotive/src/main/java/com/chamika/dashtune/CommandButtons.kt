@@ -11,6 +11,7 @@ import androidx.media3.session.CommandButton
 import androidx.media3.session.SessionCommand
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.REPEAT_COMMAND
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.SHUFFLE_COMMAND
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.SYNC_COMMAND
 import com.google.common.collect.ImmutableList
 
 object CommandButtons {
@@ -43,6 +44,12 @@ object CommandButtons {
             .setSlots(CommandButton.SLOT_OVERFLOW)
             .build()
 
-        return ImmutableList.of(shuffle, repeat)
+        val sync = CommandButton.Builder(CommandButton.ICON_SYNC)
+            .setDisplayName("Sync Library")
+            .setSessionCommand(SessionCommand(SYNC_COMMAND, Bundle.EMPTY))
+            .setSlots(CommandButton.SLOT_OVERFLOW)
+            .build()
+
+        return ImmutableList.of(shuffle, repeat, sync)
     }
 }
