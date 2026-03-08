@@ -28,8 +28,6 @@ import org.jellyfin.sdk.model.serializer.toUUID
 import java.net.ConnectException
 import java.util.concurrent.TimeoutException
 
-private const val MAX_ITEMS = 120
-
 class JellyfinMediaTree(
     private val context: Context,
     private val api: ApiClient,
@@ -106,7 +104,6 @@ class JellyfinMediaTree(
     private suspend fun getLatestAlbums(): List<MediaItem> = retryOnFailure {
         val response = api.userLibraryApi.getLatestMedia(
             includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
-            limit = MAX_ITEMS
         )
 
         response.content.map {
@@ -121,7 +118,6 @@ class JellyfinMediaTree(
             includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
             recursive = true,
             sortBy = listOf(ItemSortBy.RANDOM),
-            limit = MAX_ITEMS
         )
 
         response.content.items.map {
@@ -137,7 +133,6 @@ class JellyfinMediaTree(
             recursive = true,
             sortOrder = listOf(SortOrder.DESCENDING),
             sortBy = listOf(ItemSortBy.DATE_CREATED),
-            limit = MAX_ITEMS
         )
 
         response.content.items.map {
