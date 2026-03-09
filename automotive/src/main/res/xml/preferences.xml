@@ -29,4 +29,8 @@
         android:key="version"
         android:title="@string/app_version" />
 
+    <Preference
+        android:key="sign_out"
+        android:title="@string/sign_out" />
+
 </PreferenceScreen>

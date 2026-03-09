@@ -25,4 +25,8 @@
     <string name="prefetch_count">Offline song count</string>
     <string name="app_version">App version</string>
     <string name="library_synced">Library synced</string>
+    <string name="sign_out">Sign out</string>
+    <string name="sign_out_confirmation">Are you sure you want to sign out?</string>
+    <string name="sign_out_confirm">Sign out</string>
+    <string name="cancel">Cancel</string>
 </resources>

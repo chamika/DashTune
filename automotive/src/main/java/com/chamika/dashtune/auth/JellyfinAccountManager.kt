@@ -43,4 +43,8 @@ class JellyfinAccountManager(private val accountManager: AccountManager) {
 
         return account
     }
+
+    fun logout() {
+        account?.let { accountManager.removeAccountExplicitly(it) }
+    }
 }
