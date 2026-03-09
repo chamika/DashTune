@@ -93,7 +93,7 @@ class DashTuneSessionCallback(
 
             val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
             val tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
-            repository = MediaRepository(service, mediaCacheDao, tree, itemFactory)
+            repository = MediaRepository(mediaCacheDao, tree, itemFactory)
         }
     }
 
@@ -115,6 +115,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get library root", e)
+                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "get_library_root")
                 FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, ""))
             }
@@ -148,6 +149,8 @@ class DashTuneSessionCallback(
                 LibraryResult.ofItemList(repository.getChildren(parentId), params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get children for $parentId", e)
+                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "get_children")
+                FirebaseCrashlytics.getInstance().setCustomKey("parent_id", parentId)
                 FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media items"))
             }
@@ -190,6 +193,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get item $mediaId", e)
+                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "get_item")
                 FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media item"))
             }
@@ -289,6 +293,8 @@ class DashTuneSessionCallback(
                 LibraryResult.ofVoid(params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to search for '$query'", e)
+                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "search")
+                FirebaseCrashlytics.getInstance().setCustomKey("search_query", query)
                 FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofVoid()
             }
@@ -309,6 +315,8 @@ class DashTuneSessionCallback(
                 LibraryResult.ofItemList(results, params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
+                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "get_search_result")
+                FirebaseCrashlytics.getInstance().setCustomKey("search_query", query)
                 FirebaseCrashlytics.getInstance().recordException(e)
                 LibraryResult.ofItemList(emptyList(), params)
             }
@@ -335,6 +343,7 @@ class DashTuneSessionCallback(
                     ?.awaitAll() ?: listOf()
 
                 Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
+                FirebaseCrashlytics.getInstance().log("Restoring playback: index=${prefs.getInt(PLAYLIST_INDEX_PREF, 0)}, trackCount=${mediaItemsToRestore.size}")
 
                 MediaSession.MediaItemsWithStartPosition(
                     mediaItemsToRestore,
@@ -418,6 +427,7 @@ class DashTuneSessionCallback(
                 SessionResult(SessionResult.RESULT_SUCCESS)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to set rating for $mediaId", e)
+                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "set_rating")
                 FirebaseCrashlytics.getInstance().recordException(e)
                 SessionResult(SessionError.ERROR_UNKNOWN)
             }
@@ -426,7 +436,10 @@ class DashTuneSessionCallback(
 
     suspend fun sync(): Boolean {
         if (!::repository.isInitialized) return false
-        return repository.sync()
+        FirebaseCrashlytics.getInstance().log("Sync started")
+        val result = repository.sync()
+        FirebaseCrashlytics.getInstance().log(if (result) "Sync completed" else "Sync failed")
+        return result
     }
 
     private suspend fun applyRating(currentMediaItem: String, newRating: Rating) {
