@@ -60,6 +60,10 @@ import javax.inject.Inject
 @OptIn(UnstableApi::class)
 class DashTuneMusicService : MediaLibraryService() {
 
+    companion object {
+        const val ACTION_STOP_PLAYBACK = "com.chamika.dashtune.ACTION_STOP_PLAYBACK"
+    }
+
     @Inject
     lateinit var jellyfin: Jellyfin
 
@@ -248,6 +252,18 @@ class DashTuneMusicService : MediaLibraryService() {
 
     private fun stopPlaybackPoll() {
         handler.removeCallbacks(playbackPoll)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_PLAYBACK) {
+            if (::mediaLibrarySession.isInitialized) {
+                mediaLibrarySession.player.stop()
+                mediaLibrarySession.player.clearMediaItems()
+            }
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        return super.onStartCommand(intent, flags, startId)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession {

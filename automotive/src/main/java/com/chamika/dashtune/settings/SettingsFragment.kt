@@ -4,11 +4,13 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import com.chamika.dashtune.R
 import com.chamika.dashtune.signin.SignInActivity
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class SettingsFragment : PreferenceFragmentCompat() {
@@ -25,10 +27,12 @@ class SettingsFragment : PreferenceFragmentCompat() {
             AlertDialog.Builder(requireContext())
                 .setMessage(R.string.sign_out_confirmation)
                 .setPositiveButton(R.string.sign_out_confirm) { _, _ ->
-                    viewModel.logout()
-                    val intent = Intent(requireContext(), SignInActivity::class.java)
-                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                    startActivity(intent)
+                    lifecycleScope.launch {
+                        viewModel.logout()
+                        val intent = Intent(requireContext(), SignInActivity::class.java)
+                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        startActivity(intent)
+                    }
                 }
                 .setNegativeButton(R.string.cancel, null)
                 .show()

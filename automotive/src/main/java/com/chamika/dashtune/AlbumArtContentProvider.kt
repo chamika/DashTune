@@ -37,6 +37,18 @@ class AlbumArtContentProvider : ContentProvider() {
         }
 
         fun originalUri(contentUri: Uri): Uri? = uriMap[contentUri]
+
+        fun clearCache(cacheDir: File) {
+            uriMap.keys.forEach { contentUri ->
+                val path = contentUri.path?.removePrefix("/") ?: return@forEach
+                File(cacheDir, path).delete()
+            }
+            uriMap.clear()
+            // Also remove any lingering files from previous sessions not in uriMap
+            cacheDir.listFiles()?.forEach { file ->
+                if (file.isFile && file.name.startsWith("Items")) file.delete()
+            }
+        }
     }
 
     override fun onCreate() = true
