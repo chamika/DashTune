@@ -3,6 +3,7 @@ package com.chamika.dashtune.data
 import android.content.Context
 import android.util.Log
 import androidx.core.net.toUri
+import com.chamika.dashtune.AlbumArtContentProvider
 import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -150,7 +151,9 @@ class MediaRepository(
             parentId = parentId,
             title = metadata.title?.toString() ?: "",
             subtitle = metadata.albumArtist?.toString(),
-            artUri = metadata.artworkUri?.toString(),
+            artUri = metadata.artworkUri?.let { contentUri ->
+                AlbumArtContentProvider.originalUri(contentUri)?.toString() ?: contentUri.toString()
+            },
             mediaType = metadata.mediaType ?: 0,
             isPlayable = metadata.isPlayable == true,
             isBrowsable = metadata.isBrowsable == true,
@@ -183,7 +186,13 @@ class MediaRepository(
             .setUserRating(HeartRating(isFavorite))
 
         if (artUri != null) {
-            metadataBuilder.setArtworkUri(artUri.toUri())
+            val uri = artUri.toUri()
+            val artworkUri = if (uri.scheme == "http" || uri.scheme == "https") {
+                AlbumArtContentProvider.mapUri(uri)
+            } else {
+                uri
+            }
+            metadataBuilder.setArtworkUri(artworkUri)
         }
 
         if (durationMs != null) {
