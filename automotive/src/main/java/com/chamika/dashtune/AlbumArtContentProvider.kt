@@ -35,6 +35,8 @@ class AlbumArtContentProvider : ContentProvider() {
             uriMap[contentUri] = uri
             return contentUri
         }
+
+        fun originalUri(contentUri: Uri): Uri? = uriMap[contentUri]
     }
 
     override fun onCreate() = true
