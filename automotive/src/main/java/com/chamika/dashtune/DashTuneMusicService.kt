@@ -33,7 +33,6 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.preference.PreferenceManager
 import com.chamika.dashtune.Constants.LOG_TAG
-import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_INDEX_PREF
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TRACK_POSITON_MS_PREF
 import com.chamika.dashtune.data.db.MediaCacheDao
@@ -364,7 +363,7 @@ class DashTuneMusicService : MediaLibraryService() {
                 downloadManager.resumeDownloads()
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "Failed to prefetch: $id", e)
-                safeRecordException(e)
+                FirebaseUtils.safeRecordException(e)
             }
         }
     }
@@ -401,18 +400,6 @@ class DashTuneMusicService : MediaLibraryService() {
                     playbackOrder = PlaybackOrder.DEFAULT
                 )
             )
-        }
-    }
-
-    /**
-     * Records [e] to Firebase Crashlytics, swallowing any exception that might occur if Google
-     * Play Services is not yet available (e.g. shortly after a car OTA update).
-     */
-    private fun safeRecordException(e: Exception) {
-        try {
-            FirebaseCrashlytics.getInstance().recordException(e)
-        } catch (crashlyticsError: Exception) {
-            Log.w(LOG_TAG, "Crashlytics unavailable – Google Play Services not ready yet", crashlyticsError)
         }
     }
 
