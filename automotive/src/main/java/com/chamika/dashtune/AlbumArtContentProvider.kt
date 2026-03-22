@@ -8,7 +8,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.chamika.dashtune.Constants.LOG_TAG
-import com.chamika.dashtune.FirebaseUtils
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okio.buffer
 import okio.sink
