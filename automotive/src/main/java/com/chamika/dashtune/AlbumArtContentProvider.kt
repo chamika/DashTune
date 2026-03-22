@@ -8,7 +8,6 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.chamika.dashtune.Constants.LOG_TAG
-import com.google.firebase.crashlytics.FirebaseCrashlytics
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okio.buffer
@@ -101,8 +100,8 @@ class AlbumArtContentProvider : ContentProvider() {
                 tmpFile.renameTo(file)
             } else {
                 Log.w(LOG_TAG, "Failed to download $remoteUri: \n ${it.code} - ${it.body}")
-                FirebaseCrashlytics.getInstance().setCustomKey("album_art_path", remoteUri.path ?: "unknown")
-                FirebaseCrashlytics.getInstance().recordException(Exception("Album art download failed: HTTP ${it.code}"))
+                FirebaseUtils.safeSetCustomKey("album_art_path", remoteUri.path ?: "unknown")
+                FirebaseUtils.safeRecordException(Exception("Album art download failed: HTTP ${it.code}"))
             }
 
             inProgress.get(remoteUri)?.countDown()
