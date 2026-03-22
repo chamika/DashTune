@@ -37,6 +37,7 @@ import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_INDEX_PRE
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TRACK_POSITON_MS_PREF
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -96,6 +97,7 @@ class DashTuneMusicService : MediaLibraryService() {
         super.onCreate()
 
         Log.i(LOG_TAG, "onCreate")
+        FirebaseCrashlytics.getInstance().log("Service created")
 
         accountManager = com.chamika.dashtune.auth.JellyfinAccountManager(
             AccountManager.get(applicationContext)
@@ -152,9 +154,13 @@ class DashTuneMusicService : MediaLibraryService() {
                     if (prefetchCount > 0) {
                         prefetchNextTracks(player, prefetchCount)
                     }
+
+                    FirebaseCrashlytics.getInstance().setCustomKey("current_track_id", player.currentMediaItem?.mediaId ?: "")
+                    FirebaseCrashlytics.getInstance().setCustomKey("playlist_size", player.mediaItemCount)
                 }
 
                 if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
+                    FirebaseCrashlytics.getInstance().setCustomKey("is_playing", player.isPlaying)
                     if (player.isPlaying) {
                         startPlaybackPoll()
                     } else {
@@ -163,12 +169,14 @@ class DashTuneMusicService : MediaLibraryService() {
                 }
 
                 if (events.contains(Player.EVENT_REPEAT_MODE_CHANGED)) {
+                    FirebaseCrashlytics.getInstance().setCustomKey("repeat_mode", player.repeatMode)
                     PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService).edit {
                         putInt("repeat_mode", player.repeatMode)
                     }
                 }
 
                 if (events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) {
+                    FirebaseCrashlytics.getInstance().setCustomKey("shuffle_enabled", player.shuffleModeEnabled)
                     PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService).edit {
                         putBoolean("shuffle_enabled", player.shuffleModeEnabled)
                     }
@@ -210,7 +218,7 @@ class DashTuneMusicService : MediaLibraryService() {
             onLogin()
         }
 
-        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val networkRequest = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
@@ -218,13 +226,16 @@ class DashTuneMusicService : MediaLibraryService() {
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 Log.i(LOG_TAG, "Network available")
+                FirebaseCrashlytics.getInstance().log("Network available")
                 if (!accountManager.isAuthenticated) return
 
                 val prefs = PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService)
                 val lastSync = prefs.getLong("last_sync_timestamp", 0L)
                 val sixHoursMs = 6 * 60 * 60 * 1000L
+                val syncNeeded = System.currentTimeMillis() - lastSync > sixHoursMs
 
-                if (System.currentTimeMillis() - lastSync > sixHoursMs) {
+                if (syncNeeded) {
+                    FirebaseCrashlytics.getInstance().log("Network available: sync triggered")
                     serviceScope.launch {
                         val success = callback.sync()
                         if (success) {
@@ -237,6 +248,8 @@ class DashTuneMusicService : MediaLibraryService() {
                             ).show()
                         }
                     }
+                } else {
+                    FirebaseCrashlytics.getInstance().log("Network available: sync skipped (ran recently)")
                 }
             }
         }
@@ -271,6 +284,7 @@ class DashTuneMusicService : MediaLibraryService() {
 
     override fun onDestroy() {
         Log.i(LOG_TAG, "onDestroy")
+        FirebaseCrashlytics.getInstance().log("Service destroyed")
 
         mediaLibrarySession.release()
         mediaLibrarySession.player.removeListener(playerListener)
@@ -311,6 +325,7 @@ class DashTuneMusicService : MediaLibraryService() {
     }
 
     fun onLogin() {
+        FirebaseCrashlytics.getInstance().log("Login applied to service")
         jellyfinApi.update(
             baseUrl = accountManager.server,
             accessToken = accountManager.token
@@ -363,6 +378,7 @@ class DashTuneMusicService : MediaLibraryService() {
                 downloadManager.resumeDownloads()
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "Failed to prefetch: $id", e)
+                FirebaseCrashlytics.getInstance().setCustomKey("prefetch_track_id", id)
                 FirebaseUtils.safeRecordException(e)
             }
         }

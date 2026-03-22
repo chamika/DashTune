@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.chamika.dashtune.Constants.LOG_TAG
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okio.buffer
@@ -64,15 +65,20 @@ class AlbumArtContentProvider : ContentProvider() {
             return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
 
-        synchronized(inProgress) {
+        val existingLatch = synchronized(inProgress) {
             if (inProgress.contains(remoteUri)) {
-                Log.d(LOG_TAG, "Waiting for image download in separate thread... $remoteUri")
-                inProgress.get(remoteUri)?.await(15, TimeUnit.SECONDS)
-                Log.d(LOG_TAG, "... Available!")
-                return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                inProgress[remoteUri]
+            } else {
+                inProgress[remoteUri] = CountDownLatch(1)
+                null
             }
+        }
 
-            inProgress.put(remoteUri, CountDownLatch(1))
+        if (existingLatch != null) {
+            Log.d(LOG_TAG, "Waiting for image download in separate thread... $remoteUri")
+            existingLatch.await(15, TimeUnit.SECONDS)
+            Log.d(LOG_TAG, "... Available!")
+            return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
 
         val tmpFile = File.createTempFile("dashtune-albumart", ".png", context.cacheDir)
@@ -95,6 +101,8 @@ class AlbumArtContentProvider : ContentProvider() {
                 tmpFile.renameTo(file)
             } else {
                 Log.w(LOG_TAG, "Failed to download $remoteUri: \n ${it.code} - ${it.body}")
+                FirebaseCrashlytics.getInstance().setCustomKey("album_art_path", remoteUri.path ?: "unknown")
+                FirebaseCrashlytics.getInstance().recordException(Exception("Album art download failed: HTTP ${it.code}"))
             }
 
             inProgress.get(remoteUri)?.countDown()

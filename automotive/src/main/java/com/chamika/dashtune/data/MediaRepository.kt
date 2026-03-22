@@ -1,9 +1,7 @@
 package com.chamika.dashtune.data
 
-import android.content.Context
 import android.util.Log
 import androidx.core.net.toUri
-import com.chamika.dashtune.AlbumArtContentProvider
 import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -11,6 +9,7 @@ import androidx.media3.common.MediaMetadata.MEDIA_TYPE_ALBUM
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_ARTIST
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_MUSIC
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_PLAYLIST
+import com.chamika.dashtune.AlbumArtContentProvider
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
@@ -18,16 +17,15 @@ import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
-import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
 class MediaRepository(
-    private val context: Context,
     private val dao: MediaCacheDao,
     private val tree: JellyfinMediaTree,
     private val itemFactory: MediaItemFactory
@@ -82,6 +80,8 @@ class MediaRepository(
         val allEntities = mutableListOf<CachedMediaItemEntity>()
         var anySuccess = false
 
+        FirebaseCrashlytics.getInstance().log("Sync started: ${sectionIds.size} sections")
+
         for (sectionId in sectionIds) {
             try {
                 val children = tree.getChildren(sectionId)
@@ -92,6 +92,8 @@ class MediaRepository(
                 anySuccess = true
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to sync section $sectionId", e)
+                FirebaseCrashlytics.getInstance().setCustomKey("sync_failed_section", sectionId)
+                FirebaseCrashlytics.getInstance().recordException(e)
             }
         }
 
@@ -100,6 +102,7 @@ class MediaRepository(
             dao.insertAll(allEntities)
         }
 
+        FirebaseCrashlytics.getInstance().log("Sync completed: ${allEntities.size} items, success=$anySuccess")
         return anySuccess
     }
 

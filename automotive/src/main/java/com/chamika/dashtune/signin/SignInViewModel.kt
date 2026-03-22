@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.FirebaseUtils
 import com.chamika.dashtune.auth.JellyfinAccountManager
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -49,6 +50,8 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             response.status == 200
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Error", e)
+            val host = try { java.net.URI(serverUrl).host ?: "unknown" } catch (_: Exception) { "invalid_url" }
+            FirebaseCrashlytics.getInstance().setCustomKey("server_url_host", host)
             FirebaseUtils.safeRecordException(e)
             false
         }
@@ -103,6 +106,8 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             }
 
             if (loginResponse.status == 200) {
+                FirebaseCrashlytics.getInstance().setCustomKey("auth_method", "quick_connect")
+                FirebaseCrashlytics.getInstance().log("Login successful via quick_connect")
                 loginSuccess(
                     server,
                     loginResponse.content.user?.name!!,
@@ -119,12 +124,15 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             }
 
             if (response.status == 200) {
+                FirebaseCrashlytics.getInstance().setCustomKey("auth_method", "password")
+                FirebaseCrashlytics.getInstance().log("Login successful via password")
                 loginSuccess(server, username, response.content.accessToken!!)
             }
 
             response.status == 200
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error", e)
+            FirebaseCrashlytics.getInstance().setCustomKey("auth_method", "password")
             FirebaseUtils.safeRecordException(e)
             false
         }
