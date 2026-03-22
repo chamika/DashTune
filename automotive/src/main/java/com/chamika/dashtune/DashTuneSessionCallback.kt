@@ -115,7 +115,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get library root", e)
-                FirebaseCrashlytics.getInstance().recordException(e)
+                safeRecordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, ""))
             }
         }
@@ -148,7 +148,7 @@ class DashTuneSessionCallback(
                 LibraryResult.ofItemList(repository.getChildren(parentId), params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get children for $parentId", e)
-                FirebaseCrashlytics.getInstance().recordException(e)
+                safeRecordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media items"))
             }
         }
@@ -190,7 +190,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get item $mediaId", e)
-                FirebaseCrashlytics.getInstance().recordException(e)
+                safeRecordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media item"))
             }
         }
@@ -289,7 +289,7 @@ class DashTuneSessionCallback(
                 LibraryResult.ofVoid(params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to search for '$query'", e)
-                FirebaseCrashlytics.getInstance().recordException(e)
+                safeRecordException(e)
                 LibraryResult.ofVoid()
             }
         }
@@ -309,7 +309,7 @@ class DashTuneSessionCallback(
                 LibraryResult.ofItemList(results, params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
-                FirebaseCrashlytics.getInstance().recordException(e)
+                safeRecordException(e)
                 LibraryResult.ofItemList(emptyList(), params)
             }
         }
@@ -343,7 +343,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to resume playback", e)
-                FirebaseCrashlytics.getInstance().recordException(e)
+                safeRecordException(e)
                 MediaSession.MediaItemsWithStartPosition(
                     emptyList(),
                     0,
@@ -418,7 +418,7 @@ class DashTuneSessionCallback(
                 SessionResult(SessionResult.RESULT_SUCCESS)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to set rating for $mediaId", e)
-                FirebaseCrashlytics.getInstance().recordException(e)
+                safeRecordException(e)
                 SessionResult(SessionError.ERROR_UNKNOWN)
             }
         }
@@ -438,6 +438,18 @@ class DashTuneSessionCallback(
         } else {
             Log.i(LOG_TAG, "Unmarking as favorite")
             jellyfinApi.userLibraryApi.unmarkFavoriteItem(id)
+        }
+    }
+
+    /**
+     * Records [e] to Firebase Crashlytics, swallowing any exception that might occur if Google
+     * Play Services is not yet available (e.g. shortly after a car OTA update).
+     */
+    private fun safeRecordException(e: Exception) {
+        try {
+            FirebaseCrashlytics.getInstance().recordException(e)
+        } catch (crashlyticsError: Exception) {
+            Log.w(LOG_TAG, "Crashlytics unavailable – Google Play Services not ready yet", crashlyticsError)
         }
     }
 }

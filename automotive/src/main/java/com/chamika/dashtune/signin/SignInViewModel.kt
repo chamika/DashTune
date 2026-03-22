@@ -49,7 +49,7 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             response.status == 200
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Error", e)
-            FirebaseCrashlytics.getInstance().recordException(e)
+            safeRecordException(e)
             false
         }
     }
@@ -125,7 +125,7 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             response.status == 200
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error", e)
-            FirebaseCrashlytics.getInstance().recordException(e)
+            safeRecordException(e)
             false
         }
     }
@@ -134,6 +134,18 @@ class SignInViewModel @Inject constructor() : ViewModel() {
         Log.i(LOG_TAG, "$username successfully authenticated")
         accountManager.storeAccount(server, username, token)
         _loggedIn.postValue(true)
+    }
+
+    /**
+     * Records [e] to Firebase Crashlytics, swallowing any exception that might occur if Google
+     * Play Services is not yet available (e.g. shortly after a car OTA update).
+     */
+    private fun safeRecordException(e: Exception) {
+        try {
+            FirebaseCrashlytics.getInstance().recordException(e)
+        } catch (crashlyticsError: Exception) {
+            Log.w(LOG_TAG, "Crashlytics unavailable – Google Play Services not ready yet", crashlyticsError)
+        }
     }
 
     companion object {
