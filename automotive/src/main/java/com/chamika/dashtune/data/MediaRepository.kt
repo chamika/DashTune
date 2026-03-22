@@ -20,7 +20,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
-import com.google.firebase.crashlytics.FirebaseCrashlytics
+import com.chamika.dashtune.FirebaseUtils
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
@@ -80,7 +80,7 @@ class MediaRepository(
         val allEntities = mutableListOf<CachedMediaItemEntity>()
         var anySuccess = false
 
-        FirebaseCrashlytics.getInstance().log("Sync started: ${sectionIds.size} sections")
+        FirebaseUtils.safeLog("Sync started: ${sectionIds.size} sections")
 
         for (sectionId in sectionIds) {
             try {
@@ -92,8 +92,8 @@ class MediaRepository(
                 anySuccess = true
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to sync section $sectionId", e)
-                FirebaseCrashlytics.getInstance().setCustomKey("sync_failed_section", sectionId)
-                FirebaseCrashlytics.getInstance().recordException(e)
+                FirebaseUtils.safeSetCustomKey("sync_failed_section", sectionId)
+                FirebaseUtils.safeRecordException(e)
             }
         }
 
@@ -102,7 +102,7 @@ class MediaRepository(
             dao.insertAll(allEntities)
         }
 
-        FirebaseCrashlytics.getInstance().log("Sync completed: ${allEntities.size} items, success=$anySuccess")
+        FirebaseUtils.safeLog("Sync completed: ${allEntities.size} items, success=$anySuccess")
         return anySuccess
     }
 

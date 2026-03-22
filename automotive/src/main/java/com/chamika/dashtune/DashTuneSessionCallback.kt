@@ -36,7 +36,6 @@ import com.chamika.dashtune.signin.SignInActivity
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
-import com.google.firebase.crashlytics.FirebaseCrashlytics
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import org.jellyfin.sdk.api.client.ApiClient
@@ -115,7 +114,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get library root", e)
-                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "get_library_root")
+                FirebaseUtils.safeSetCustomKey("failed_operation", "get_library_root")
                 FirebaseUtils.safeRecordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, ""))
             }
@@ -149,8 +148,8 @@ class DashTuneSessionCallback(
                 LibraryResult.ofItemList(repository.getChildren(parentId), params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get children for $parentId", e)
-                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "get_children")
-                FirebaseCrashlytics.getInstance().setCustomKey("parent_id", parentId)
+                FirebaseUtils.safeSetCustomKey("failed_operation", "get_children")
+                FirebaseUtils.safeSetCustomKey("parent_id", parentId)
                 FirebaseUtils.safeRecordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media items"))
             }
@@ -193,7 +192,7 @@ class DashTuneSessionCallback(
                 )
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get item $mediaId", e)
-                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "get_item")
+                FirebaseUtils.safeSetCustomKey("failed_operation", "get_item")
                 FirebaseUtils.safeRecordException(e)
                 LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media item"))
             }
@@ -293,8 +292,8 @@ class DashTuneSessionCallback(
                 LibraryResult.ofVoid(params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to search for '$query'", e)
-                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "search")
-                FirebaseCrashlytics.getInstance().setCustomKey("search_query", query)
+                FirebaseUtils.safeSetCustomKey("failed_operation", "search")
+                FirebaseUtils.safeSetCustomKey("search_query", query)
                 FirebaseUtils.safeRecordException(e)
                 LibraryResult.ofVoid()
             }
@@ -315,8 +314,8 @@ class DashTuneSessionCallback(
                 LibraryResult.ofItemList(results, params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
-                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "get_search_result")
-                FirebaseCrashlytics.getInstance().setCustomKey("search_query", query)
+                FirebaseUtils.safeSetCustomKey("failed_operation", "get_search_result")
+                FirebaseUtils.safeSetCustomKey("search_query", query)
                 FirebaseUtils.safeRecordException(e)
                 LibraryResult.ofItemList(emptyList(), params)
             }
@@ -343,7 +342,7 @@ class DashTuneSessionCallback(
                     ?.awaitAll() ?: listOf()
 
                 Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
-                FirebaseCrashlytics.getInstance().log("Restoring playback: index=${prefs.getInt(PLAYLIST_INDEX_PREF, 0)}, trackCount=${mediaItemsToRestore.size}")
+                FirebaseUtils.safeLog("Restoring playback: index=${prefs.getInt(PLAYLIST_INDEX_PREF, 0)}, trackCount=${mediaItemsToRestore.size}")
 
                 MediaSession.MediaItemsWithStartPosition(
                     mediaItemsToRestore,
@@ -427,7 +426,7 @@ class DashTuneSessionCallback(
                 SessionResult(SessionResult.RESULT_SUCCESS)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to set rating for $mediaId", e)
-                FirebaseCrashlytics.getInstance().setCustomKey("failed_operation", "set_rating")
+                FirebaseUtils.safeSetCustomKey("failed_operation", "set_rating")
                 FirebaseUtils.safeRecordException(e)
                 SessionResult(SessionError.ERROR_UNKNOWN)
             }
@@ -436,9 +435,9 @@ class DashTuneSessionCallback(
 
     suspend fun sync(): Boolean {
         if (!::repository.isInitialized) return false
-        FirebaseCrashlytics.getInstance().log("Sync started")
+        FirebaseUtils.safeLog("Sync started")
         val result = repository.sync()
-        FirebaseCrashlytics.getInstance().log(if (result) "Sync completed" else "Sync failed")
+        FirebaseUtils.safeLog(if (result) "Sync completed" else "Sync failed")
         return result
     }
 
