@@ -227,7 +227,7 @@ class MediaItemFactory(
         val metadata = MediaMetadata.Builder()
             .setTitle(item.name)
             .setAlbumArtist(item.albumArtist)
-            .setIsBrowsable(true)
+            .setIsBrowsable((item.childCount ?: 0) > 0)
             .setIsPlayable(true)
             .setArtworkUri(artUri(item.id))
             .setMediaType(MediaMetadata.MEDIA_TYPE_ALBUM)
