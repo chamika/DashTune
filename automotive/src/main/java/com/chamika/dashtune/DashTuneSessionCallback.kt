@@ -302,7 +302,13 @@ class DashTuneSessionCallback(
             if (item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_ALBUM ||
                 item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_PLAYLIST
             ) {
-                resolveMediaItems(repository.getChildren(item.mediaId)).forEach(playlist::add)
+                val children = resolveMediaItems(repository.getChildren(item.mediaId))
+                if (children.isNotEmpty()) {
+                    children.forEach(playlist::add)
+                } else if (item.localConfiguration?.uri != null) {
+                    // Single-file audiobook with no children — play directly
+                    playlist.add(item)
+                }
             } else if (item.mediaMetadata.isPlayable == true) {
                 playlist.add(item)
             } else {

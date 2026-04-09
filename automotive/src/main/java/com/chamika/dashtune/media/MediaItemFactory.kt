@@ -226,9 +226,12 @@ class MediaItemFactory(
             .setExtras(extras)
             .build()
 
+        val audioStream = streamingUri(item.id.toString())
+
         return MediaItem.Builder()
             .setMediaId(item.id.toString())
             .setMediaMetadata(metadata)
+            .setUri(audioStream)
             .build()
     }
 
