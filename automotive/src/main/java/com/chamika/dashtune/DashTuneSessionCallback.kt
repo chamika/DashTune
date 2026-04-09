@@ -219,7 +219,7 @@ class DashTuneSessionCallback(
         startIndex: Int,
         startPositionMs: Long,
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-        Log.i(LOG_TAG, "onSetMediaItems $mediaItems")
+        Log.i(LOG_TAG, "onSetMediaItems ${mediaItems.size} items")
         return SuspendToFutureAdapter.launchFuture {
             if (isSingleItemWithParent(mediaItems)) {
                 val singleItem = mediaItems[0]
@@ -229,6 +229,27 @@ class DashTuneSessionCallback(
                     it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
                 }
                 handleAudiobookShuffle(mediaSession, isAudiobookContent)
+
+                if (isAudiobookContent) {
+                    val bookId = singleItem.mediaId
+                    try {
+                        val resumeInfo = withTimeoutOrNull(3000) {
+                            getAudiobookResumePosition(bookId, resolvedItems)
+                        }
+                        if (resumeInfo != null) {
+                            Log.i(LOG_TAG, "Audiobook resume: chapter=${resumeInfo.first}, position=${resumeInfo.second} ms")
+                            val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
+                                resolvedItems,
+                                resumeInfo.first,
+                                resumeInfo.second
+                            )
+                            savePlaylist(resolvedItems)
+                            return@launchFuture mediaItemsWithStartPosition
+                        }
+                    } catch (e: Exception) {
+                        Log.w(LOG_TAG, "Failed to get audiobook resume position (singleItemWithParent)", e)
+                    }
+                }
 
                 val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
                     resolvedItems,
@@ -510,18 +531,22 @@ class DashTuneSessionCallback(
         )
 
         val chaptersData = response.content.items
+
+        // Multi-chapter book: find last-played chapter that matches resolved items
         if (chaptersData.isNotEmpty()) {
             val lastInProgress = chaptersData
                 .filter { (it.userData?.playbackPositionTicks ?: 0) > 0 }
                 .filter { it.userData?.lastPlayedDate != null }
                 .maxByOrNull { it.userData?.lastPlayedDate!! }
-                ?: return null
 
-            val chapterIndex = chapters.indexOfFirst { it.mediaId == lastInProgress.id.toString() }
-            if (chapterIndex < 0) return null
-
-            val positionMs = (lastInProgress.userData?.playbackPositionTicks ?: 0) / 10_000
-            return Pair(chapterIndex, positionMs)
+            if (lastInProgress != null) {
+                val chapterIndex = chapters.indexOfFirst { it.mediaId == lastInProgress.id.toString() }
+                if (chapterIndex >= 0) {
+                    val positionMs = (lastInProgress.userData?.playbackPositionTicks ?: 0) / 10_000
+                    return Pair(chapterIndex, positionMs)
+                }
+            }
+            // Fall through: children didn't match resolved items (e.g. folder/library items)
         }
 
         // Single-file audiobook: check the item's own userData
@@ -530,7 +555,6 @@ class DashTuneSessionCallback(
         val positionTicks = item.userData?.playbackPositionTicks ?: 0
         if (positionTicks > 0) {
             val positionMs = positionTicks / 10_000
-            Log.i(LOG_TAG, "Single-file audiobook resume position: $positionMs ms")
             return Pair(0, positionMs)
         }
 
