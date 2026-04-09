@@ -307,7 +307,10 @@ class DashTuneSessionCallback(
                     children.forEach(playlist::add)
                 } else if (item.localConfiguration?.uri != null) {
                     // Single-file audiobook with no children — play directly
+                    Log.i(LOG_TAG, "Playing single-file audiobook directly: ${item.mediaMetadata.title}")
                     playlist.add(item)
+                } else {
+                    Log.w(LOG_TAG, "Empty children and no URI for ${item.mediaMetadata.title} (type=${item.mediaMetadata.mediaType}, playable=${item.mediaMetadata.isPlayable})")
                 }
             } else if (item.mediaMetadata.isPlayable == true) {
                 playlist.add(item)

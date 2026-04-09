@@ -20,6 +20,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.FirebaseUtils
 import kotlinx.coroutines.sync.Mutex
@@ -213,7 +214,8 @@ class MediaRepository(
             .setMediaId(mediaId)
             .setMediaMetadata(metadataBuilder.build())
 
-        if (mediaType == MEDIA_TYPE_MUSIC && isPlayable) {
+        val isAudiobook = extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+        if (isPlayable && (mediaType == MEDIA_TYPE_MUSIC || isAudiobook)) {
             itemBuilder.setUri(itemFactory.streamingUri(mediaId))
         }
 
