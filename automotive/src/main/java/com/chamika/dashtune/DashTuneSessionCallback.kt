@@ -30,6 +30,7 @@ import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.signin.SignInActivity
@@ -38,8 +39,11 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
+import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.serializer.toUUID
 
 @OptIn(UnstableApi::class)
@@ -221,6 +225,11 @@ class DashTuneSessionCallback(
                 val singleItem = mediaItems[0]
                 val resolvedItems = expandSingleItem(singleItem)
 
+                val isAudiobookContent = resolvedItems.any {
+                    it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+                }
+                handleAudiobookShuffle(mediaSession, isAudiobookContent)
+
                 val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
                     resolvedItems,
                     resolvedItems.indexOfFirst { it.mediaId == singleItem.mediaId },
@@ -231,10 +240,35 @@ class DashTuneSessionCallback(
             }
 
             val resolvedItems = resolveMediaItems(mediaItems)
+
+            val isAudiobookContent = resolvedItems.any {
+                it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+            }
+            handleAudiobookShuffle(mediaSession, isAudiobookContent)
+
+            var finalStartIndex = startIndex
+            var finalStartPositionMs = startPositionMs
+
+            if (isAudiobookContent && mediaItems.size == 1) {
+                val bookId = mediaItems[0].mediaId
+                try {
+                    val resumeInfo = withTimeoutOrNull(3000) {
+                        getAudiobookResumePosition(bookId, resolvedItems)
+                    }
+                    if (resumeInfo != null) {
+                        finalStartIndex = resumeInfo.first
+                        finalStartPositionMs = resumeInfo.second
+                        Log.i(LOG_TAG, "Audiobook resume: chapter=$finalStartIndex, position=$finalStartPositionMs ms")
+                    }
+                } catch (e: Exception) {
+                    Log.w(LOG_TAG, "Failed to get audiobook resume position, using local fallback", e)
+                }
+            }
+
             val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
                 resolvedItems,
-                startIndex,
-                startPositionMs
+                finalStartIndex,
+                finalStartPositionMs
             )
             savePlaylist(resolvedItems)
             mediaItemsWithStartPosition
@@ -450,6 +484,55 @@ class DashTuneSessionCallback(
         } else {
             Log.i(LOG_TAG, "Unmarking as favorite")
             jellyfinApi.userLibraryApi.unmarkFavoriteItem(id)
+        }
+    }
+
+    private suspend fun getAudiobookResumePosition(
+        bookId: String,
+        chapters: List<MediaItem>
+    ): Pair<Int, Long>? {
+        val response = jellyfinApi.itemsApi.getItems(
+            parentId = bookId.toUUID(),
+            sortBy = listOf(
+                ItemSortBy.PARENT_INDEX_NUMBER,
+                ItemSortBy.INDEX_NUMBER,
+                ItemSortBy.SORT_NAME
+            )
+        )
+
+        val chaptersData = response.content.items
+        val lastInProgress = chaptersData
+            .filter { (it.userData?.playbackPositionTicks ?: 0) > 0 }
+            .filter { it.userData?.lastPlayedDate != null }
+            .maxByOrNull { it.userData?.lastPlayedDate!! }
+            ?: return null
+
+        val chapterIndex = chapters.indexOfFirst { it.mediaId == lastInProgress.id.toString() }
+        if (chapterIndex < 0) return null
+
+        val positionMs = (lastInProgress.userData?.playbackPositionTicks ?: 0) / 10_000
+        return Pair(chapterIndex, positionMs)
+    }
+
+    private fun handleAudiobookShuffle(
+        mediaSession: MediaSession,
+        isAudiobookContent: Boolean
+    ) {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(service)
+        val player = mediaSession.player
+
+        if (isAudiobookContent) {
+            if (player.shuffleModeEnabled) {
+                prefs.edit { putBoolean("shuffle_before_audiobook", true) }
+                player.shuffleModeEnabled = false
+                mediaSession.setMediaButtonPreferences(CommandButtons.createButtons(player))
+            }
+        } else {
+            if (prefs.getBoolean("shuffle_before_audiobook", false)) {
+                prefs.edit { putBoolean("shuffle_before_audiobook", false) }
+                player.shuffleModeEnabled = true
+                mediaSession.setMediaButtonPreferences(CommandButtons.createButtons(player))
+            }
         }
     }
 }
