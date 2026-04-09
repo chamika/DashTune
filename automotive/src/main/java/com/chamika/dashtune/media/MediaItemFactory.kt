@@ -215,6 +215,14 @@ class MediaItemFactory(
             extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
         }
         extras.putBoolean(IS_AUDIOBOOK_KEY, true)
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
 
         val metadata = MediaMetadata.Builder()
             .setTitle(item.name)
@@ -232,6 +240,36 @@ class MediaItemFactory(
             .setMediaId(item.id.toString())
             .setMediaMetadata(metadata)
             .setUri(audioStream)
+            .build()
+    }
+
+    fun forFolder(item: BaseItemDto, group: String? = null): MediaItem {
+        val extras = Bundle()
+        if (group != null) {
+            extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
+        }
+        extras.putBoolean(IS_AUDIOBOOK_KEY, true)
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(item.name)
+            .setIsBrowsable(true)
+            .setIsPlayable(false)
+            .setArtworkUri(artUri(item.id))
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS)
+            .setExtras(extras)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(item.id.toString())
+            .setMediaMetadata(metadata)
             .build()
     }
 
@@ -317,6 +355,7 @@ class MediaItemFactory(
             BaseItemKind.MUSIC_ARTIST -> forArtist(baseItemDto, group)
             BaseItemKind.MUSIC_ALBUM -> forAlbum(baseItemDto, group)
             BaseItemKind.AUDIO_BOOK -> forAudiobook(baseItemDto, group)
+            BaseItemKind.FOLDER -> forFolder(baseItemDto, group)
             BaseItemKind.PLAYLIST -> forPlaylist(baseItemDto, group)
             BaseItemKind.AUDIO -> forTrack(baseItemDto, group, parent, isAudiobook)
             else -> throw UnsupportedOperationException("Can't create mediaItem for ${baseItemDto.type}")

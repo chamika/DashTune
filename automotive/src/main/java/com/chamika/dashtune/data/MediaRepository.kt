@@ -117,7 +117,8 @@ class MediaRepository(
 
         val shouldFetchChildren = mediaType == MEDIA_TYPE_ARTIST ||
                 mediaType == MEDIA_TYPE_ALBUM ||
-                mediaType == MEDIA_TYPE_PLAYLIST
+                mediaType == MEDIA_TYPE_PLAYLIST ||
+                mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS
 
         if (!shouldFetchChildren) return
 
@@ -127,7 +128,8 @@ class MediaRepository(
                 allEntities.add(child.toEntity(mediaId, index))
 
                 // For artists, recurse into their albums (which may contain tracks)
-                if (mediaType == MEDIA_TYPE_ARTIST) {
+                // For folders, recurse into subfolders/audiobooks
+                if (mediaType == MEDIA_TYPE_ARTIST || mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS) {
                     syncChildrenRecursively(child, allEntities)
                 }
             }

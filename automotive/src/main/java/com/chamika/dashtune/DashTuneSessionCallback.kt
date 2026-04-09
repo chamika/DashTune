@@ -510,17 +510,31 @@ class DashTuneSessionCallback(
         )
 
         val chaptersData = response.content.items
-        val lastInProgress = chaptersData
-            .filter { (it.userData?.playbackPositionTicks ?: 0) > 0 }
-            .filter { it.userData?.lastPlayedDate != null }
-            .maxByOrNull { it.userData?.lastPlayedDate!! }
-            ?: return null
+        if (chaptersData.isNotEmpty()) {
+            val lastInProgress = chaptersData
+                .filter { (it.userData?.playbackPositionTicks ?: 0) > 0 }
+                .filter { it.userData?.lastPlayedDate != null }
+                .maxByOrNull { it.userData?.lastPlayedDate!! }
+                ?: return null
 
-        val chapterIndex = chapters.indexOfFirst { it.mediaId == lastInProgress.id.toString() }
-        if (chapterIndex < 0) return null
+            val chapterIndex = chapters.indexOfFirst { it.mediaId == lastInProgress.id.toString() }
+            if (chapterIndex < 0) return null
 
-        val positionMs = (lastInProgress.userData?.playbackPositionTicks ?: 0) / 10_000
-        return Pair(chapterIndex, positionMs)
+            val positionMs = (lastInProgress.userData?.playbackPositionTicks ?: 0) / 10_000
+            return Pair(chapterIndex, positionMs)
+        }
+
+        // Single-file audiobook: check the item's own userData
+        val itemResponse = jellyfinApi.userLibraryApi.getItem(bookId.toUUID())
+        val item = itemResponse.content
+        val positionTicks = item.userData?.playbackPositionTicks ?: 0
+        if (positionTicks > 0) {
+            val positionMs = positionTicks / 10_000
+            Log.i(LOG_TAG, "Single-file audiobook resume position: $positionMs ms")
+            return Pair(0, positionMs)
+        }
+
+        return null
     }
 
     private fun handleAudiobookShuffle(

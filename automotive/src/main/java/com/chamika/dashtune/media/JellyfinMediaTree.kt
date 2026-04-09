@@ -22,8 +22,10 @@ import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.artistsApi
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
+import org.jellyfin.sdk.api.client.extensions.userViewsApi
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
+import org.jellyfin.sdk.model.api.CollectionType
 import org.jellyfin.sdk.model.api.ItemFilter
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.SortOrder
@@ -164,17 +166,26 @@ class JellyfinMediaTree(
     }
 
     private suspend fun getBooks(): List<MediaItem> = retryOnFailure {
+        val views = api.userViewsApi.getUserViews()
+        val booksLibrary = views.content.items.firstOrNull {
+            it.collectionType == CollectionType.BOOKS
+        } ?: return@retryOnFailure emptyList()
+
         val response = api.itemsApi.getItems(
-            includeItemTypes = listOf(BaseItemKind.AUDIO_BOOK),
-            recursive = true,
+            parentId = booksLibrary.id,
             sortBy = listOf(ItemSortBy.SORT_NAME),
             limit = MAX_ITEMS
         )
 
-        response.content.items.map {
-            val item = itemFactory.create(it)
-            mediaItems.put(item.mediaId, item)
-            item
+        response.content.items.mapNotNull {
+            try {
+                val item = itemFactory.create(it)
+                mediaItems.put(item.mediaId, item)
+                item
+            } catch (e: UnsupportedOperationException) {
+                Log.w(LOG_TAG, "Skipping unsupported item type in books: ${it.type}")
+                null
+            }
         }
     }
 
