@@ -19,6 +19,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.FirebaseUtils
 import kotlinx.coroutines.sync.Mutex
@@ -33,7 +34,7 @@ class MediaRepository(
 
     private val syncMutex = Mutex()
 
-    private val staticIds = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS)
+    private val staticIds = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS)
 
     suspend fun getItem(id: String): MediaItem {
         if (id in staticIds) {
@@ -76,7 +77,7 @@ class MediaRepository(
     }
 
     suspend fun sync(): Boolean = syncMutex.withLock {
-        val sectionIds = listOf(LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS)
+        val sectionIds = tree.getActiveCategoryIds()
         val allEntities = mutableListOf<CachedMediaItemEntity>()
         var anySuccess = false
 
@@ -142,6 +143,7 @@ class MediaRepository(
                 when (val value = bundle.get(key)) {
                     is String -> json.put(key, value)
                     is Int -> json.put(key, value)
+                    is Boolean -> json.put(key, value)
                 }
             }
             if (json.length() > 0) json.toString() else null
@@ -175,6 +177,7 @@ class MediaRepository(
                 when (val value = jsonObj.get(key)) {
                     is String -> bundle.putString(key, value)
                     is Int -> bundle.putInt(key, value)
+                    is Boolean -> bundle.putBoolean(key, value)
                 }
             }
             bundle
