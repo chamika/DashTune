@@ -37,6 +37,7 @@ import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_INDEX_PRE
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TRACK_POSITON_MS_PREF
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,7 @@ import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.playStateApi
 import org.jellyfin.sdk.model.api.PlaybackStartInfo
 import org.jellyfin.sdk.model.api.PlaybackOrder
+import org.jellyfin.sdk.model.api.PlaybackProgressInfo
 import org.jellyfin.sdk.model.api.PlaybackStopInfo
 import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.RepeatMode
@@ -78,6 +80,8 @@ class DashTuneMusicService : MediaLibraryService() {
     private val handler: Handler = Handler(Looper.getMainLooper())
     private var currentPlaybackTime: Long = 0
     private var currentTrack: MediaItem? = null
+    private var isPlayingAudiobook: Boolean = false
+    private lateinit var audiobookProgressPoll: Runnable
 
     private lateinit var playbackPoll: Runnable
     private lateinit var playerListener: Player.Listener
@@ -156,14 +160,30 @@ class DashTuneMusicService : MediaLibraryService() {
 
                     FirebaseUtils.safeSetCustomKey("current_track_id", player.currentMediaItem?.mediaId ?: "")
                     FirebaseUtils.safeSetCustomKey("playlist_size", player.mediaItemCount)
+
+                    val wasPlayingAudiobook = isPlayingAudiobook
+                    isPlayingAudiobook = player.currentMediaItem
+                        ?.mediaMetadata?.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+
+                    if (isPlayingAudiobook) {
+                        handler.removeCallbacks(audiobookProgressPoll)
+                        handler.postDelayed(audiobookProgressPoll, 30_000)
+                    } else if (wasPlayingAudiobook) {
+                        handler.removeCallbacks(audiobookProgressPoll)
+                    }
                 }
 
                 if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
                     FirebaseUtils.safeSetCustomKey("is_playing", player.isPlaying)
                     if (player.isPlaying) {
                         startPlaybackPoll()
+                        if (isPlayingAudiobook) {
+                            handler.removeCallbacks(audiobookProgressPoll)
+                            handler.postDelayed(audiobookProgressPoll, 30_000)
+                        }
                     } else {
                         stopPlaybackPoll()
+                        handler.removeCallbacks(audiobookProgressPoll)
                     }
                 }
 
@@ -204,6 +224,31 @@ class DashTuneMusicService : MediaLibraryService() {
                     putLong(PLAYLIST_TRACK_POSITON_MS_PREF, currentPlaybackTime)
                 }
                 handler.postDelayed(playbackPoll, 1000)
+            }
+        }
+
+        audiobookProgressPoll = Runnable {
+            val p = mediaLibrarySession.player
+            if (p.isPlaying && isPlayingAudiobook && p.currentMediaItem != null) {
+                serviceScope.launch {
+                    try {
+                        jellyfinApi.playStateApi.reportPlaybackProgress(
+                            PlaybackProgressInfo(
+                                itemId = p.currentMediaItem!!.mediaId.toUUID(),
+                                positionTicks = p.currentPosition * 10_000,
+                                isPaused = false,
+                                isMuted = false,
+                                playMethod = PlayMethod.DIRECT_PLAY,
+                                canSeek = true,
+                                repeatMode = RepeatMode.REPEAT_NONE,
+                                playbackOrder = PlaybackOrder.DEFAULT
+                            )
+                        )
+                    } catch (e: Exception) {
+                        Log.w(LOG_TAG, "Failed to report audiobook progress", e)
+                    }
+                }
+                handler.postDelayed(audiobookProgressPoll, 30_000)
             }
         }
 
@@ -289,6 +334,7 @@ class DashTuneMusicService : MediaLibraryService() {
         mediaLibrarySession.player.removeListener(playerListener)
         mediaLibrarySession.player.release()
         handler.removeCallbacks(playbackPoll)
+        handler.removeCallbacks(audiobookProgressPoll)
 
         try {
             downloadManager.removeListener(downloadListener)
