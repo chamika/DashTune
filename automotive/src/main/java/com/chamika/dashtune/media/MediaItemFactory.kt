@@ -34,7 +34,9 @@ class MediaItemFactory(
         const val RANDOM_ALBUMS = "RANDOM_ALBUMS_ID"
         const val FAVOURITES = "FAVOURITES_ID"
         const val PLAYLISTS = "PLAYLISTS_ID"
+        const val BOOKS = "BOOKS_ID"
         const val PARENT_KEY = "PARENT_KEY"
+        const val IS_AUDIOBOOK_KEY = "is_audiobook"
     }
 
     fun rootNode(): MediaItem {
@@ -101,6 +103,10 @@ class MediaItemFactory(
             .setMediaId(PLAYLISTS)
             .setMediaMetadata(metadata)
             .build()
+    }
+
+    fun books(): MediaItem {
+        return albumCategory(BOOKS, "Books", "ic_book")
     }
 
     private fun albumCategory(id: String, label: String, icon: String): MediaItem {
@@ -203,10 +209,34 @@ class MediaItemFactory(
             .build()
     }
 
+    private fun forAudiobook(item: BaseItemDto, group: String? = null): MediaItem {
+        val extras = Bundle()
+        if (group != null) {
+            extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
+        }
+        extras.putBoolean(IS_AUDIOBOOK_KEY, true)
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(item.name)
+            .setAlbumArtist(item.albumArtist)
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .setArtworkUri(artUri(item.id))
+            .setMediaType(MediaMetadata.MEDIA_TYPE_ALBUM)
+            .setExtras(extras)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(item.id.toString())
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
     private fun forTrack(
         item: BaseItemDto,
         group: String? = null,
-        parent: String? = null
+        parent: String? = null,
+        isAudiobook: Boolean = false
     ): MediaItem {
         val hasOwnImage = item.imageTags?.containsKey(ImageType.PRIMARY) == true
         val artUrl = artUri(if (hasOwnImage) item.id else (item.albumId ?: item.id))
@@ -220,6 +250,10 @@ class MediaItemFactory(
 
         if (parent != null) {
             extras.putString(PARENT_KEY, parent)
+        }
+
+        if (isAudiobook) {
+            extras.putBoolean(IS_AUDIOBOOK_KEY, true)
         }
 
         val metadata = MediaMetadata.Builder()
@@ -273,13 +307,15 @@ class MediaItemFactory(
     fun create(
         baseItemDto: BaseItemDto,
         group: String? = null,
-        parent: String? = null
+        parent: String? = null,
+        isAudiobook: Boolean = false
     ): MediaItem {
         return when (baseItemDto.type) {
             BaseItemKind.MUSIC_ARTIST -> forArtist(baseItemDto, group)
             BaseItemKind.MUSIC_ALBUM -> forAlbum(baseItemDto, group)
+            BaseItemKind.AUDIO_BOOK -> forAudiobook(baseItemDto, group)
             BaseItemKind.PLAYLIST -> forPlaylist(baseItemDto, group)
-            BaseItemKind.AUDIO -> forTrack(baseItemDto, group, parent)
+            BaseItemKind.AUDIO -> forTrack(baseItemDto, group, parent, isAudiobook)
             else -> throw UnsupportedOperationException("Can't create mediaItem for ${baseItemDto.type}")
         }
     }
