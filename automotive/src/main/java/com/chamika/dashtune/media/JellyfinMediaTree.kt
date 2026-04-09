@@ -5,9 +5,12 @@ import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_ARTIST
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_PLAYLIST
+import androidx.preference.PreferenceManager
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.R
+import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
@@ -39,6 +42,23 @@ class JellyfinMediaTree(
     private val mediaItems: Cache<String, MediaItem> = CacheBuilder.newBuilder()
         .maximumSize(1000)
         .build()
+
+    fun getActiveCategoryIds(): List<String> {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val defaults = setOf("latest", "favourites", "books", "playlists")
+        val selected = prefs.getStringSet("browse_categories", defaults) ?: defaults
+        val canonicalOrder = listOf(
+            "latest" to LATEST_ALBUMS,
+            "favourites" to FAVOURITES,
+            "books" to BOOKS,
+            "playlists" to PLAYLISTS,
+            "random" to RANDOM_ALBUMS
+        )
+        val validKeys = canonicalOrder.map { it.first }.toSet()
+        val validSelected = selected.intersect(validKeys)
+        val finalSelected = validSelected.ifEmpty { defaults }
+        return canonicalOrder.filter { it.first in finalSelected }.map { it.second }
+    }
 
     private suspend fun <T> retryOnFailure(
         maxRetries: Int = 2,
@@ -74,6 +94,7 @@ class JellyfinMediaTree(
                 RANDOM_ALBUMS -> itemFactory.randomAlbums()
                 FAVOURITES -> itemFactory.favourites()
                 PLAYLISTS -> itemFactory.playlists()
+                BOOKS -> itemFactory.books()
                 else -> retryOnFailure {
                     val response = api.userLibraryApi.getItem(id.toUUID())
                     itemFactory.create(response.content)
@@ -88,17 +109,12 @@ class JellyfinMediaTree(
 
     suspend fun getChildren(id: String): List<MediaItem> {
         return when (id) {
-            ROOT_ID -> listOf(
-                getItem(LATEST_ALBUMS),
-                getItem(RANDOM_ALBUMS),
-                getItem(FAVOURITES),
-                getItem(PLAYLISTS)
-            )
-
+            ROOT_ID -> getActiveCategoryIds().map { getItem(it) }
             LATEST_ALBUMS -> getLatestAlbums()
             RANDOM_ALBUMS -> getRandomAlbums()
             FAVOURITES -> getFavourite()
             PLAYLISTS -> getPlaylists()
+            BOOKS -> getBooks()
             else -> getItemChildren(id)
         }
     }
@@ -147,10 +163,29 @@ class JellyfinMediaTree(
         }
     }
 
+    private suspend fun getBooks(): List<MediaItem> = retryOnFailure {
+        val response = api.itemsApi.getItems(
+            includeItemTypes = listOf(BaseItemKind.AUDIO_BOOK),
+            recursive = true,
+            sortBy = listOf(ItemSortBy.SORT_NAME),
+            limit = MAX_ITEMS
+        )
+
+        response.content.items.map {
+            val item = itemFactory.create(it)
+            mediaItems.put(item.mediaId, item)
+            item
+        }
+    }
+
     private suspend fun getItemChildren(id: String): List<MediaItem> {
-        if (getItem(id).mediaMetadata.mediaType == MEDIA_TYPE_ARTIST) {
+        val parentItem = getItem(id)
+
+        if (parentItem.mediaMetadata.mediaType == MEDIA_TYPE_ARTIST) {
             return getArtistAlbums(id)
         }
+
+        val isAudiobook = parentItem.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
 
         var sortBy = listOf(
             ItemSortBy.PARENT_INDEX_NUMBER,
@@ -158,7 +193,7 @@ class JellyfinMediaTree(
             ItemSortBy.SORT_NAME
         )
 
-        if (getItem(id).mediaMetadata.mediaType == MEDIA_TYPE_PLAYLIST) {
+        if (parentItem.mediaMetadata.mediaType == MEDIA_TYPE_PLAYLIST) {
             sortBy = listOf(ItemSortBy.DEFAULT)
         }
 
@@ -169,7 +204,7 @@ class JellyfinMediaTree(
             )
 
             response.content.items.map {
-                val item = itemFactory.create(it, parent = id)
+                val item = itemFactory.create(it, parent = id, isAudiobook = isAudiobook)
                 mediaItems.put(item.mediaId, item)
                 item
             }
@@ -202,7 +237,8 @@ class JellyfinMediaTree(
             includeItemTypes = listOf(
                 BaseItemKind.AUDIO,
                 BaseItemKind.MUSIC_ALBUM,
-                BaseItemKind.MUSIC_ARTIST
+                BaseItemKind.MUSIC_ARTIST,
+                BaseItemKind.AUDIO_BOOK
             )
         )
 
@@ -217,14 +253,12 @@ class JellyfinMediaTree(
         }
     }
 
-    private fun groupForItem(dto: BaseItemDto): String = (
-            if (dto.type == BaseItemKind.MUSIC_ALBUM)
-                context.getString(R.string.albums)
-            else if (dto.type == BaseItemKind.MUSIC_ARTIST)
-                context.getString(R.string.artists)
-            else
-                context.getString(R.string.tracks)
-            )
+    private fun groupForItem(dto: BaseItemDto): String = when (dto.type) {
+        BaseItemKind.MUSIC_ALBUM -> context.getString(R.string.albums)
+        BaseItemKind.MUSIC_ARTIST -> context.getString(R.string.artists)
+        BaseItemKind.AUDIO_BOOK -> context.getString(R.string.books)
+        else -> context.getString(R.string.tracks)
+    }
 
     suspend fun search(query: String): List<MediaItem> = retryOnFailure {
         val items = mutableListOf<MediaItem>()
@@ -262,6 +296,19 @@ class JellyfinMediaTree(
 
         items.addAll(response.content.items.map {
             val item = itemFactory.create(it, context.getString(R.string.playlists))
+            mediaItems.put(item.mediaId, item)
+            item
+        })
+
+        response = api.itemsApi.getItems(
+            recursive = true,
+            searchTerm = query,
+            includeItemTypes = listOf(BaseItemKind.AUDIO_BOOK),
+            limit = 10
+        )
+
+        items.addAll(response.content.items.map {
+            val item = itemFactory.create(it, context.getString(R.string.books))
             mediaItems.put(item.mediaId, item)
             item
         })
