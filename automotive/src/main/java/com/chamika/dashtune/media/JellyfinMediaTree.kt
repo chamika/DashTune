@@ -203,10 +203,15 @@ class JellyfinMediaTree(
                 parentId = id.toUUID()
             )
 
-            response.content.items.map {
-                val item = itemFactory.create(it, parent = id, isAudiobook = isAudiobook)
-                mediaItems.put(item.mediaId, item)
-                item
+            response.content.items.mapNotNull {
+                try {
+                    val item = itemFactory.create(it, parent = id, isAudiobook = isAudiobook)
+                    mediaItems.put(item.mediaId, item)
+                    item
+                } catch (e: UnsupportedOperationException) {
+                    Log.w(LOG_TAG, "Skipping unsupported item type: ${it.type}")
+                    null
+                }
             }
         }
     }
