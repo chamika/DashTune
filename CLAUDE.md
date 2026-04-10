@@ -1,6 +1,6 @@
 # DashTune
 
-Jellyfin music player for Android Automotive OS (AAOS) with offline download capabilities.
+Jellyfin music and audiobook player for Android Automotive OS (AAOS) with offline download capabilities.
 
 ## Build & Run
 
@@ -34,12 +34,19 @@ automotive/src/main/java/com/chamika/dashtune/
 ├── AlbumArtContentProvider.kt      # ContentProvider serving album art to system UI
 ├── CommandButtons.kt               # Shuffle/repeat command button definitions
 ├── Constants.kt                    # App constants (LOG_TAG)
+├── FirebaseUtils.kt                # Safe Firebase Analytics/Crashlytics wrapper
 ├── auth/
 │   ├── Authenticator.kt            # Android AccountAuthenticator
 │   ├── AuthenticatorService.kt     # Authenticator bound service
 │   └── JellyfinAccountManager.kt   # Account storage wrapper
+├── data/
+│   ├── MediaRepository.kt          # Cache layer: syncs Jellyfin items to Room DB
+│   └── db/
+│       ├── CachedMediaItemEntity.kt # Room entity for cached media items
+│       ├── DashTuneDatabase.kt     # Room database definition
+│       └── MediaCacheDao.kt        # DAO for media cache queries
 ├── di/
-│   └── DashTuneModule.kt           # Hilt module (Jellyfin SDK, AccountManager)
+│   └── DashTuneModule.kt           # Hilt module (Jellyfin SDK, AccountManager, Room)
 ├── media/
 │   ├── JellyfinMediaTree.kt        # Browsable media tree with Guava cache
 │   └── MediaItemFactory.kt         # Converts Jellyfin DTOs to Media3 MediaItems
@@ -67,8 +74,8 @@ automotive/src/main/java/com/chamika/dashtune/
 ### Media Service Flow
 1. `DashTuneMusicService` (MediaLibraryService) creates ExoPlayer + MediaLibrarySession in `onCreate()`
 2. `DashTuneSessionCallback` handles browsing (onGetLibraryRoot, onGetChildren, onSearch) and playback commands
-3. `JellyfinMediaTree` builds the browsable hierarchy: Latest Albums, Random Albums, Favourites, Playlists
-4. `MediaItemFactory` converts Jellyfin `BaseItemDto` to Media3 `MediaItem` for artists, albums, playlists, tracks
+3. `JellyfinMediaTree` builds the browsable hierarchy from user-configured categories (Latest, Favourites, Books, Playlists, Random)
+4. `MediaItemFactory` converts Jellyfin `BaseItemDto` to Media3 `MediaItem` for artists, albums, playlists, tracks, and audiobooks
 5. `AlbumArtContentProvider` serves album art via `content://` URIs so the AAOS system UI can display them
 
 ### Authentication
@@ -83,15 +90,25 @@ automotive/src/main/java/com/chamika/dashtune/
 - On track change, prefetches next 5 tracks via `DownloadManager`
 - Playback position saved every 1s, restored on playback resumption
 
+### Audiobook Support
+- `MediaItemFactory.forAudiobook()` creates browsable/playable items with `IS_AUDIOBOOK_KEY` metadata flag
+- Browse hierarchy: Books category → Folders/Collections → Individual books → Chapters
+- Multi-chapter audiobooks expand into ordered playlists via `expandSingleItem()` in `DashTuneSessionCallback`
+- Position saved to Jellyfin server via `itemsApi.updateItemUserData()` (UserData API) on pause/stop
+- Position restored from server via `userLibraryApi.getItem()` → `userData.playbackPositionTicks`
+- AAOS completion status extras show progress bars on chapter items in browse UI
+- Shuffle auto-disabled when audiobook content detected, restored when switching to music
+- `MediaRepository` caches audiobook items in Room DB with parent relationships for offline browsing
+
 ### Playback State Persistence
 - Playlist track IDs, current index, position, repeat mode, shuffle state saved to SharedPreferences
 - Restored via `onPlaybackResumption()` callback
 
 ## Key Jellyfin APIs Used
-- `userLibraryApi` - Browse library, latest items, favourites
-- `itemsApi` - Query/search items
+- `userLibraryApi` - Browse library, latest items, favourites, get item userData
+- `itemsApi` - Query/search items, update user data (audiobook position persistence)
 - `artistsApi` - Album artists
-- `playStateApi` - Report playback start/stop
+- `playStateApi` - Report playback start/stop (session tracking)
 - `universalAudioApi` - Streaming URLs with transcoding
 - `systemApi` - Server ping
 - `quickConnectApi` - QuickConnect auth flow
@@ -103,6 +120,7 @@ automotive/src/main/java/com/chamika/dashtune/
 | Bitrate | `bitrate` | Direct stream | Direct stream, 320k, 256k, 192k, 160k, 128k |
 | Cache Size | `cache_size` | 200 MB | 100, 200, 500, 1024, 2048 MB |
 | Offline Song Count | `prefetch_count` | 5 | Off (0), 3, 5, 10, 15, 20 |
+| Browse Categories | `browse_categories` | Latest,Favourites,Books,Playlists | Min 2, max 4 from: Latest, Favourites, Books, Playlists, Random |
 
 ## Manifest Components
 - **DashTuneMusicService**: `foregroundServiceType="mediaPlayback"`, intent filters for Media3 + legacy MediaBrowserService
