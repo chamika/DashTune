@@ -3,6 +3,7 @@ package com.chamika.dashtune
 import android.accounts.AccountManager
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -89,6 +90,12 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var connectivityManager: ConnectivityManager
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "browse_categories") {
+            mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
+        }
+    }
 
     // Offline cache
     private lateinit var downloadCache: SimpleCache
@@ -258,6 +265,9 @@ class DashTuneMusicService : MediaLibraryService() {
             .setMediaButtonPreferences(CommandButtons.createButtons(player))
             .build()
 
+        PreferenceManager.getDefaultSharedPreferences(this)
+            .registerOnSharedPreferenceChangeListener(prefsListener)
+
         if (accountManager.isAuthenticated) {
             onLogin()
         }
@@ -350,6 +360,8 @@ class DashTuneMusicService : MediaLibraryService() {
         }
 
         networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        PreferenceManager.getDefaultSharedPreferences(this)
+            .unregisterOnSharedPreferenceChangeListener(prefsListener)
 
         super.onDestroy()
     }
