@@ -14,6 +14,9 @@ interface MediaCacheDao {
     @Query("SELECT * FROM cached_media_items WHERE mediaId = :mediaId LIMIT 1")
     suspend fun getItem(mediaId: String): CachedMediaItemEntity?
 
+    @Query("SELECT parentId FROM cached_media_items WHERE mediaId = :mediaId")
+    suspend fun getParentIds(mediaId: String): List<String>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<CachedMediaItemEntity>)
 

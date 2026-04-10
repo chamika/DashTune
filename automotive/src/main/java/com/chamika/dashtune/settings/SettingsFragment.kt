@@ -3,8 +3,10 @@ package com.chamika.dashtune.settings
 import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import androidx.preference.MultiSelectListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import com.chamika.dashtune.R
@@ -22,6 +24,22 @@ class SettingsFragment : PreferenceFragmentCompat() {
 
         viewModel = ViewModelProvider(this)[SettingsViewModel::class.java]
         findPreference<Preference>("version")?.summary = viewModel.versionString()
+
+        findPreference<MultiSelectListPreference>("browse_categories")?.setOnPreferenceChangeListener { _, newValue ->
+            @Suppress("UNCHECKED_CAST")
+            val selected = newValue as? Set<String> ?: return@setOnPreferenceChangeListener false
+            when {
+                selected.size < 2 -> {
+                    Toast.makeText(requireContext(), R.string.min_categories_warning, Toast.LENGTH_SHORT).show()
+                    false
+                }
+                selected.size > 4 -> {
+                    Toast.makeText(requireContext(), R.string.max_categories_warning, Toast.LENGTH_SHORT).show()
+                    false
+                }
+                else -> true
+            }
+        }
 
         findPreference<Preference>("sign_out")?.setOnPreferenceClickListener {
             AlertDialog.Builder(requireContext())

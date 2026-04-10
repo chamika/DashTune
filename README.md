@@ -1,19 +1,27 @@
 # DashTune
 
-A fully-featured Jellyfin music player for Android Automotive OS (AAOS) with offline download capabilities.
+A fully-featured Jellyfin music and audiobook player for Android Automotive OS (AAOS) with offline download capabilities.
 
 ## Overview
 
-DashTune brings the complete Jellyfin music library experience to your car's infotainment system. Stream your music collection, download tracks for offline playback, and enjoy seamless integration with Android Automotive OS.
+DashTune brings the complete Jellyfin music library experience to your car's infotainment system. Stream your music collection, browse audiobooks, download tracks for offline playback, and enjoy seamless integration with Android Automotive OS.
 
 ## Features
 
 ### 🎵 Music Streaming & Playback
 - **Media3 ExoPlayer** - Modern, high-performance audio playback
-- **Browse Library** - Latest albums, random albums, favorites, and playlists
+- **Configurable Browse Categories** - Choose 2-4 categories from Latest, Favourites, Books, Playlists, Random
 - **Search** - Find artists, albums, playlists, and tracks
 - **Playback Controls** - Play, pause, skip, seek with shuffle and repeat modes
 - **State Persistence** - Automatically resume where you left off
+
+### 📚 Audiobook Support
+- **Browsable Library** - Books appear as a top-level category with folder hierarchy
+- **Multi-Chapter Playback** - Chapters play as an ordered playlist with next/previous navigation
+- **Server-Synced Position** - Playback position saved to Jellyfin server on pause/stop
+- **Resume Anywhere** - Resume from saved position after app restart or on another device
+- **Progress Indicators** - AAOS completion status shows read progress on chapter items
+- **Auto-Disable Shuffle** - Shuffle automatically turns off for audiobook playback
 
 ### 📥 Offline Playback
 - **Smart Caching** - Automatic caching of streamed tracks (configurable size: 100MB - 2GB)
@@ -37,6 +45,7 @@ DashTune brings the complete Jellyfin music library experience to your car's inf
 ### ⚙️ Settings
 - **Bitrate Selection** - Direct stream or transcode (320/256/192/160/128 kbps)
 - **Cache Size** - Configure offline storage (100MB/200MB/500MB/1GB/2GB)
+- **Browse Categories** - Choose which categories appear in the media player (min 2, max 4)
 - **Version Info** - Display app and Jellyfin SDK versions
 
 ## Tech Stack
@@ -45,10 +54,11 @@ DashTune brings the complete Jellyfin music library experience to your car's inf
 - **Min SDK:** 28 (Android 9.0)
 - **Target SDK:** 36
 - **Architecture:** Single automotive module with Hilt DI
-- **Media:** AndroidX Media3 (ExoPlayer + MediaLibraryService)
-- **Jellyfin SDK:** org.jellyfin.sdk:jellyfin-core:1.6.1
-- **Dependency Injection:** Hilt 2.51.1
-- **HTTP Client:** OkHttp 4.12.0
+- **Media:** AndroidX Media3 (ExoPlayer + MediaLibraryService) 1.9.2
+- **Jellyfin SDK:** org.jellyfin.sdk:jellyfin-core:1.8.6
+- **Dependency Injection:** Hilt 2.59.1
+- **HTTP Client:** OkHttp 5.3.2
+- **Database:** Room (media cache, parent relationships)
 - **UI:** XML layouts with ViewBinding
 - **Caching:** Guava cache for metadata, SimpleCache for media files
 
@@ -65,6 +75,7 @@ DashTune/
 │       │   ├── AlbumArtContentProvider.kt      # Album art delivery
 │       │   ├── CommandButtons.kt               # Shuffle/Repeat buttons
 │       │   ├── auth/                           # Authentication & account management
+│       │   ├── data/                           # MediaRepository, Room DB (cache + position)
 │       │   ├── di/                             # Hilt dependency injection
 │       │   ├── media/                          # Media tree & item factory
 │       │   ├── settings/                       # Settings UI
@@ -131,9 +142,20 @@ The app will appear in the car's media app list.
 
 ### Browse Categories
 - **Latest** - Recently added albums
-- **Random** - Shuffled album discovery
 - **Favourites** - Your hearted tracks, albums, and artists
+- **Books** - Audiobooks with folder hierarchy and chapter navigation
 - **Playlists** - All your Jellyfin playlists
+- **Random** - Shuffled album discovery
+
+Categories are configurable in Settings (min 2, max 4). Defaults: Latest, Favourites, Books, Playlists.
+
+### Audiobook Playback
+- Browse audiobooks in a folder hierarchy (collections → books → chapters)
+- Multi-chapter audiobooks play as ordered playlists
+- Playback position synced to Jellyfin server via UserData API
+- Resume from last position after app restart
+- Progress indicators show completion percentage in browse UI
+- Shuffle auto-disabled during audiobook playback (restored when switching to music)
 
 ### Offline Mode
 - Tracks are automatically cached as you stream
@@ -149,13 +171,14 @@ The app will appear in the car's media app list.
 ## Dependencies
 
 Key libraries:
-- `androidx.media3:media3-exoplayer:1.7.1`
-- `androidx.media3:media3-session:1.7.1`
-- `org.jellyfin.sdk:jellyfin-core:1.6.1`
-- `com.google.dagger:hilt-android:2.51.1`
-- `com.squareup.okhttp3:okhttp:4.12.0`
+- `androidx.media3:media3-exoplayer:1.9.2`
+- `androidx.media3:media3-session:1.9.2`
+- `org.jellyfin.sdk:jellyfin-core:1.8.6`
+- `com.google.dagger:hilt-android:2.59.1`
+- `com.squareup.okhttp3:okhttp:5.3.2`
 - `androidx.preference:preference-ktx:1.2.1`
-- `androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.0`
+- `androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0`
+- `androidx.room:room-runtime` (media cache database)
 
 See `gradle/libs.versions.toml` for complete dependency list.
 

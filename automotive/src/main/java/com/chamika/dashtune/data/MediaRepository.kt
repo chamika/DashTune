@@ -19,6 +19,8 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.FirebaseUtils
 import kotlinx.coroutines.sync.Mutex
@@ -33,7 +35,7 @@ class MediaRepository(
 
     private val syncMutex = Mutex()
 
-    private val staticIds = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS)
+    private val staticIds = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS)
 
     suspend fun getItem(id: String): MediaItem {
         if (id in staticIds) {
@@ -44,6 +46,10 @@ class MediaRepository(
             return cached.toMediaItem()
         }
         return tree.getItem(id)
+    }
+
+    suspend fun getContentParentId(mediaId: String): String? {
+        return dao.getParentIds(mediaId).firstOrNull { it !in staticIds }
     }
 
     suspend fun getChildren(parentId: String): List<MediaItem> {
@@ -76,7 +82,7 @@ class MediaRepository(
     }
 
     suspend fun sync(): Boolean = syncMutex.withLock {
-        val sectionIds = listOf(LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS)
+        val sectionIds = tree.getActiveCategoryIds()
         val allEntities = mutableListOf<CachedMediaItemEntity>()
         var anySuccess = false
 
@@ -113,9 +119,12 @@ class MediaRepository(
         val mediaType = item.mediaMetadata.mediaType
         val mediaId = item.mediaId
 
-        val shouldFetchChildren = mediaType == MEDIA_TYPE_ARTIST ||
+        val shouldFetchChildren = item.mediaMetadata.isBrowsable == true && (
+                mediaType == MEDIA_TYPE_ARTIST ||
                 mediaType == MEDIA_TYPE_ALBUM ||
-                mediaType == MEDIA_TYPE_PLAYLIST
+                mediaType == MEDIA_TYPE_PLAYLIST ||
+                mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS
+        )
 
         if (!shouldFetchChildren) return
 
@@ -125,7 +134,8 @@ class MediaRepository(
                 allEntities.add(child.toEntity(mediaId, index))
 
                 // For artists, recurse into their albums (which may contain tracks)
-                if (mediaType == MEDIA_TYPE_ARTIST) {
+                // For folders, recurse into subfolders/audiobooks
+                if (mediaType == MEDIA_TYPE_ARTIST || mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS) {
                     syncChildrenRecursively(child, allEntities)
                 }
             }
@@ -142,6 +152,7 @@ class MediaRepository(
                 when (val value = bundle.get(key)) {
                     is String -> json.put(key, value)
                     is Int -> json.put(key, value)
+                    is Boolean -> json.put(key, value)
                 }
             }
             if (json.length() > 0) json.toString() else null
@@ -175,6 +186,7 @@ class MediaRepository(
                 when (val value = jsonObj.get(key)) {
                     is String -> bundle.putString(key, value)
                     is Int -> bundle.putInt(key, value)
+                    is Boolean -> bundle.putBoolean(key, value)
                 }
             }
             bundle
@@ -210,7 +222,8 @@ class MediaRepository(
             .setMediaId(mediaId)
             .setMediaMetadata(metadataBuilder.build())
 
-        if (mediaType == MEDIA_TYPE_MUSIC && isPlayable) {
+        val isAudiobook = extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+        if (isPlayable && (mediaType == MEDIA_TYPE_MUSIC || isAudiobook)) {
             itemBuilder.setUri(itemFactory.streamingUri(mediaId))
         }
 

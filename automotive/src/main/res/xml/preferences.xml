@@ -25,6 +25,14 @@
         android:summary="%s"
         android:title="@string/prefetch_count" />
 
+    <MultiSelectListPreference
+        android:defaultValue="@array/defaultBrowseCategories"
+        android:entries="@array/browseCategories"
+        android:entryValues="@array/browseCategoryValues"
+        android:key="browse_categories"
+        android:summary="@string/browse_categories_summary"
+        android:title="@string/browse_categories" />
+
     <Preference
         android:key="version"
         android:title="@string/app_version" />

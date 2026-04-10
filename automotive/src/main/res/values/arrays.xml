@@ -51,4 +51,27 @@
         <item>15</item>
         <item>20</item>
     </string-array>
+
+    <string-array name="browseCategories">
+        <item>Latest</item>
+        <item>Favourites</item>
+        <item>Books</item>
+        <item>Playlists</item>
+        <item>Random</item>
+    </string-array>
+
+    <string-array name="browseCategoryValues">
+        <item>latest</item>
+        <item>favourites</item>
+        <item>books</item>
+        <item>playlists</item>
+        <item>random</item>
+    </string-array>
+
+    <string-array name="defaultBrowseCategories">
+        <item>latest</item>
+        <item>favourites</item>
+        <item>books</item>
+        <item>playlists</item>
+    </string-array>
 </resources>

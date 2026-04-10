@@ -3,6 +3,7 @@ package com.chamika.dashtune
 import android.accounts.AccountManager
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -37,6 +38,7 @@ import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_INDEX_PRE
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TRACK_POSITON_MS_PREF
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,12 +46,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.playStateApi
 import org.jellyfin.sdk.model.api.PlaybackStartInfo
 import org.jellyfin.sdk.model.api.PlaybackOrder
 import org.jellyfin.sdk.model.api.PlaybackStopInfo
 import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.RepeatMode
+import org.jellyfin.sdk.model.api.UpdateUserItemDataDto
 import org.jellyfin.sdk.model.serializer.toUUID
 import java.io.File
 import java.util.concurrent.Executors
@@ -78,6 +82,7 @@ class DashTuneMusicService : MediaLibraryService() {
     private val handler: Handler = Handler(Looper.getMainLooper())
     private var currentPlaybackTime: Long = 0
     private var currentTrack: MediaItem? = null
+    private var isPlayingAudiobook: Boolean = false
 
     private lateinit var playbackPoll: Runnable
     private lateinit var playerListener: Player.Listener
@@ -85,6 +90,12 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var connectivityManager: ConnectivityManager
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "browse_categories") {
+            mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
+        }
+    }
 
     // Offline cache
     private lateinit var downloadCache: SimpleCache
@@ -140,6 +151,9 @@ class DashTuneMusicService : MediaLibraryService() {
         playerListener = object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
+                    // Save audiobook position for the OLD track before transition
+                    reportAudiobookStopped(player)
+
                     PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService).edit {
                         putInt(PLAYLIST_INDEX_PREF, player.currentMediaItemIndex)
                     }
@@ -156,14 +170,23 @@ class DashTuneMusicService : MediaLibraryService() {
 
                     FirebaseUtils.safeSetCustomKey("current_track_id", player.currentMediaItem?.mediaId ?: "")
                     FirebaseUtils.safeSetCustomKey("playlist_size", player.mediaItemCount)
+
+                    isPlayingAudiobook = player.currentMediaItem
+                        ?.mediaMetadata?.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
                 }
 
                 if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
                     FirebaseUtils.safeSetCustomKey("is_playing", player.isPlaying)
                     if (player.isPlaying) {
                         startPlaybackPoll()
+                        if (isPlayingAudiobook && player.currentMediaItem != null) {
+                            reportAudiobookStart(player)
+                        }
                     } else {
                         stopPlaybackPoll()
+                        // Save audiobook position — reportAudiobookStopped uses currentTrack
+                        // (the old item) so it's safe during transitions
+                        reportAudiobookStopped(player)
                     }
                 }
 
@@ -212,6 +235,9 @@ class DashTuneMusicService : MediaLibraryService() {
         mediaLibrarySession = MediaLibrarySession.Builder(this, player, callback)
             .setMediaButtonPreferences(CommandButtons.createButtons(player))
             .build()
+
+        PreferenceManager.getDefaultSharedPreferences(this)
+            .registerOnSharedPreferenceChangeListener(prefsListener)
 
         if (accountManager.isAuthenticated) {
             onLogin()
@@ -304,6 +330,8 @@ class DashTuneMusicService : MediaLibraryService() {
         }
 
         networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        PreferenceManager.getDefaultSharedPreferences(this)
+            .unregisterOnSharedPreferenceChangeListener(prefsListener)
 
         super.onDestroy()
     }
@@ -379,6 +407,53 @@ class DashTuneMusicService : MediaLibraryService() {
                 Log.w(LOG_TAG, "Failed to prefetch: $id", e)
                 FirebaseUtils.safeSetCustomKey("prefetch_track_id", id)
                 FirebaseUtils.safeRecordException(e)
+            }
+        }
+    }
+
+    private fun reportAudiobookStopped(player: Player) {
+        // Use tracked state (currentTrack/currentPlaybackTime) which reflect the item
+        // that was actually playing, not player.currentMediaItem which may already
+        // point to the next item during transitions.
+        val track = currentTrack ?: player.currentMediaItem ?: return
+        val mediaId = track.mediaId
+        val isAudiobook = track.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+        if (!isAudiobook) return
+
+        val positionMs = if (currentTrack != null) currentPlaybackTime else player.currentPosition
+        val ticks = positionMs * 10_000
+        Log.i(LOG_TAG, "Audiobook stopped: $mediaId at ${positionMs}ms")
+        serviceScope.launch {
+            try {
+                jellyfinApi.itemsApi.updateItemUserData(
+                    itemId = mediaId.toUUID(),
+                    data = UpdateUserItemDataDto(playbackPositionTicks = ticks)
+                )
+                Log.i(LOG_TAG, "Audiobook position saved: $mediaId at ${positionMs}ms")
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to save audiobook position", e)
+            }
+        }
+    }
+
+    private fun reportAudiobookStart(player: Player) {
+        val mediaId = player.currentMediaItem?.mediaId ?: return
+        Log.i(LOG_TAG, "Audiobook started: $mediaId")
+        serviceScope.launch {
+            try {
+                jellyfinApi.playStateApi.reportPlaybackStart(
+                    PlaybackStartInfo(
+                        itemId = mediaId.toUUID(),
+                        canSeek = true,
+                        isPaused = false,
+                        isMuted = false,
+                        playMethod = PlayMethod.DIRECT_PLAY,
+                        repeatMode = RepeatMode.REPEAT_NONE,
+                        playbackOrder = PlaybackOrder.DEFAULT
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to report audiobook start", e)
             }
         }
     }
