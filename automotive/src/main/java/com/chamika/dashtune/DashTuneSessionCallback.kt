@@ -231,23 +231,22 @@ class DashTuneSessionCallback(
                 handleAudiobookShuffle(mediaSession, isAudiobookContent)
 
                 if (isAudiobookContent) {
-                    val bookId = singleItem.mediaId
+                    val selectedId = singleItem.mediaId
+                    val selectedIndex = resolvedItems.indexOfFirst { it.mediaId == selectedId }.coerceAtLeast(0)
                     try {
-                        val resumeInfo = withTimeoutOrNull(3000) {
-                            getAudiobookResumePosition(bookId, resolvedItems)
-                        }
-                        if (resumeInfo != null) {
-                            Log.i(LOG_TAG, "Audiobook resume: chapter=${resumeInfo.first}, position=${resumeInfo.second} ms")
-                            val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
-                                resolvedItems,
-                                resumeInfo.first,
-                                resumeInfo.second
-                            )
-                            savePlaylist(resolvedItems)
-                            return@launchFuture mediaItemsWithStartPosition
-                        }
+                        val positionMs = withTimeoutOrNull(3000) {
+                            getChapterResumePosition(selectedId)
+                        } ?: 0L
+                        Log.i(LOG_TAG, "Audiobook chapter resume: index=$selectedIndex, position=$positionMs ms")
+                        val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
+                            resolvedItems,
+                            selectedIndex,
+                            positionMs
+                        )
+                        savePlaylist(resolvedItems)
+                        return@launchFuture mediaItemsWithStartPosition
                     } catch (e: Exception) {
-                        Log.w(LOG_TAG, "Failed to get audiobook resume position (singleItemWithParent)", e)
+                        Log.w(LOG_TAG, "Failed to get chapter resume position", e)
                     }
                 }
 
@@ -306,13 +305,20 @@ class DashTuneSessionCallback(
     }
 
     private suspend fun isSingleItemWithParent(mediaItems: List<MediaItem>): Boolean {
-        return mediaItems.size == 1 &&
-                repository.getItem(mediaItems[0].mediaId).mediaMetadata.extras?.containsKey(PARENT_KEY) == true
+        if (mediaItems.size != 1) return false
+        val mediaId = mediaItems[0].mediaId
+        val item = repository.getItem(mediaId)
+        if (item.mediaMetadata.extras?.containsKey(PARENT_KEY) == true) return true
+        // Fall back to DB parent relationship (handles stale cache)
+        return repository.getContentParentId(mediaId) != null
     }
 
     private suspend fun expandSingleItem(item: MediaItem): List<MediaItem> {
-        val parentId = repository.getItem(item.mediaId).mediaMetadata.extras?.getString(PARENT_KEY)!!
-        return resolveMediaItems(repository.getChildren(parentId))
+        val parentId = repository.getItem(item.mediaId).mediaMetadata.extras?.getString(PARENT_KEY)
+            ?: repository.getContentParentId(item.mediaId)
+            ?: return listOf(item)
+        val children = repository.getChildren(parentId)
+        return resolveMediaItems(children)
     }
 
     private suspend fun resolveMediaItems(mediaItems: List<MediaItem>): List<MediaItem> {
@@ -320,9 +326,11 @@ class DashTuneSessionCallback(
 
         mediaItems.forEach {
             val item = repository.getItem(it.mediaId)
-            if (item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_ALBUM ||
-                item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_PLAYLIST
-            ) {
+            val isExpandable = (item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_ALBUM ||
+                    item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_PLAYLIST) &&
+                    item.mediaMetadata.isBrowsable == true
+
+            if (isExpandable) {
                 val children = resolveMediaItems(repository.getChildren(item.mediaId))
                 if (children.isNotEmpty()) {
                     children.forEach(playlist::add)
@@ -559,6 +567,14 @@ class DashTuneSessionCallback(
         }
 
         return null
+    }
+
+    private suspend fun getChapterResumePosition(chapterId: String): Long {
+        val itemResponse = jellyfinApi.userLibraryApi.getItem(chapterId.toUUID())
+        val userData = itemResponse.content.userData
+        Log.i(LOG_TAG, "Server userData for $chapterId: positionTicks=${userData?.playbackPositionTicks}, played=${userData?.played}, playCount=${userData?.playCount}")
+        val positionTicks = userData?.playbackPositionTicks ?: 0
+        return positionTicks / 10_000
     }
 
     private fun handleAudiobookShuffle(

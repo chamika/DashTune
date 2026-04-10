@@ -48,6 +48,10 @@ class MediaRepository(
         return tree.getItem(id)
     }
 
+    suspend fun getContentParentId(mediaId: String): String? {
+        return dao.getParentIds(mediaId).firstOrNull { it !in staticIds }
+    }
+
     suspend fun getChildren(parentId: String): List<MediaItem> {
         if (parentId == ROOT_ID) {
             return tree.getChildren(ROOT_ID)
@@ -115,10 +119,12 @@ class MediaRepository(
         val mediaType = item.mediaMetadata.mediaType
         val mediaId = item.mediaId
 
-        val shouldFetchChildren = mediaType == MEDIA_TYPE_ARTIST ||
+        val shouldFetchChildren = item.mediaMetadata.isBrowsable == true && (
+                mediaType == MEDIA_TYPE_ARTIST ||
                 mediaType == MEDIA_TYPE_ALBUM ||
                 mediaType == MEDIA_TYPE_PLAYLIST ||
                 mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS
+        )
 
         if (!shouldFetchChildren) return
 

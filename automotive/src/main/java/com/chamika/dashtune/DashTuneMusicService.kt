@@ -46,13 +46,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.playStateApi
 import org.jellyfin.sdk.model.api.PlaybackStartInfo
 import org.jellyfin.sdk.model.api.PlaybackOrder
-import org.jellyfin.sdk.model.api.PlaybackProgressInfo
 import org.jellyfin.sdk.model.api.PlaybackStopInfo
 import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.RepeatMode
+import org.jellyfin.sdk.model.api.UpdateUserItemDataDto
 import org.jellyfin.sdk.model.serializer.toUUID
 import java.io.File
 import java.util.concurrent.Executors
@@ -82,7 +83,6 @@ class DashTuneMusicService : MediaLibraryService() {
     private var currentPlaybackTime: Long = 0
     private var currentTrack: MediaItem? = null
     private var isPlayingAudiobook: Boolean = false
-    private lateinit var audiobookProgressPoll: Runnable
 
     private lateinit var playbackPoll: Runnable
     private lateinit var playerListener: Player.Listener
@@ -168,29 +168,22 @@ class DashTuneMusicService : MediaLibraryService() {
                     FirebaseUtils.safeSetCustomKey("current_track_id", player.currentMediaItem?.mediaId ?: "")
                     FirebaseUtils.safeSetCustomKey("playlist_size", player.mediaItemCount)
 
-                    val wasPlayingAudiobook = isPlayingAudiobook
                     isPlayingAudiobook = player.currentMediaItem
                         ?.mediaMetadata?.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
-
-                    if (isPlayingAudiobook) {
-                        handler.removeCallbacks(audiobookProgressPoll)
-                        handler.postDelayed(audiobookProgressPoll, 30_000)
-                    } else if (wasPlayingAudiobook) {
-                        handler.removeCallbacks(audiobookProgressPoll)
-                    }
                 }
 
                 if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
                     FirebaseUtils.safeSetCustomKey("is_playing", player.isPlaying)
                     if (player.isPlaying) {
                         startPlaybackPoll()
-                        if (isPlayingAudiobook) {
-                            handler.removeCallbacks(audiobookProgressPoll)
-                            handler.postDelayed(audiobookProgressPoll, 30_000)
+                        if (isPlayingAudiobook && player.currentMediaItem != null) {
+                            reportAudiobookStart(player)
                         }
                     } else {
                         stopPlaybackPoll()
-                        handler.removeCallbacks(audiobookProgressPoll)
+                        if (isPlayingAudiobook && player.currentMediaItem != null) {
+                            reportAudiobookStopped(player)
+                        }
                     }
                 }
 
@@ -231,31 +224,6 @@ class DashTuneMusicService : MediaLibraryService() {
                     putLong(PLAYLIST_TRACK_POSITON_MS_PREF, currentPlaybackTime)
                 }
                 handler.postDelayed(playbackPoll, 1000)
-            }
-        }
-
-        audiobookProgressPoll = Runnable {
-            val p = mediaLibrarySession.player
-            if (p.isPlaying && isPlayingAudiobook && p.currentMediaItem != null) {
-                serviceScope.launch {
-                    try {
-                        jellyfinApi.playStateApi.reportPlaybackProgress(
-                            PlaybackProgressInfo(
-                                itemId = p.currentMediaItem!!.mediaId.toUUID(),
-                                positionTicks = p.currentPosition * 10_000,
-                                isPaused = false,
-                                isMuted = false,
-                                playMethod = PlayMethod.DIRECT_PLAY,
-                                canSeek = true,
-                                repeatMode = RepeatMode.REPEAT_NONE,
-                                playbackOrder = PlaybackOrder.DEFAULT
-                            )
-                        )
-                    } catch (e: Exception) {
-                        Log.w(LOG_TAG, "Failed to report audiobook progress", e)
-                    }
-                }
-                handler.postDelayed(audiobookProgressPoll, 30_000)
             }
         }
 
@@ -344,7 +312,6 @@ class DashTuneMusicService : MediaLibraryService() {
         mediaLibrarySession.player.removeListener(playerListener)
         mediaLibrarySession.player.release()
         handler.removeCallbacks(playbackPoll)
-        handler.removeCallbacks(audiobookProgressPoll)
 
         try {
             downloadManager.removeListener(downloadListener)
@@ -437,6 +404,47 @@ class DashTuneMusicService : MediaLibraryService() {
                 Log.w(LOG_TAG, "Failed to prefetch: $id", e)
                 FirebaseUtils.safeSetCustomKey("prefetch_track_id", id)
                 FirebaseUtils.safeRecordException(e)
+            }
+        }
+    }
+
+    private fun reportAudiobookStopped(player: Player) {
+        val mediaId = player.currentMediaItem?.mediaId ?: return
+        val positionMs = player.currentPosition
+        val ticks = positionMs * 10_000
+        Log.i(LOG_TAG, "Audiobook stopped: $mediaId at ${positionMs}ms")
+        serviceScope.launch {
+            try {
+                // Use direct UserData API — playback session APIs don't persist positionTicks
+                jellyfinApi.itemsApi.updateItemUserData(
+                    itemId = mediaId.toUUID(),
+                    data = UpdateUserItemDataDto(playbackPositionTicks = ticks)
+                )
+                Log.i(LOG_TAG, "Audiobook position saved: $mediaId at ${positionMs}ms")
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to save audiobook position", e)
+            }
+        }
+    }
+
+    private fun reportAudiobookStart(player: Player) {
+        val mediaId = player.currentMediaItem?.mediaId ?: return
+        Log.i(LOG_TAG, "Audiobook started: $mediaId")
+        serviceScope.launch {
+            try {
+                jellyfinApi.playStateApi.reportPlaybackStart(
+                    PlaybackStartInfo(
+                        itemId = mediaId.toUUID(),
+                        canSeek = true,
+                        isPaused = false,
+                        isMuted = false,
+                        playMethod = PlayMethod.DIRECT_PLAY,
+                        repeatMode = RepeatMode.REPEAT_NONE,
+                        playbackOrder = PlaybackOrder.DEFAULT
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to report audiobook start", e)
             }
         }
     }

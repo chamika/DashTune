@@ -37,6 +37,12 @@ class MediaItemFactory(
         const val BOOKS = "BOOKS_ID"
         const val PARENT_KEY = "PARENT_KEY"
         const val IS_AUDIOBOOK_KEY = "is_audiobook"
+
+        private const val EXTRA_COMPLETION_STATUS = "android.media.extra.COMPLETION_STATUS"
+        private const val EXTRA_COMPLETION_PERCENTAGE = "android.media.extra.COMPLETION_PERCENTAGE"
+        private const val COMPLETION_STATUS_NOT_PLAYED = 0
+        private const val COMPLETION_STATUS_PARTIALLY_PLAYED = 1
+        private const val COMPLETION_STATUS_FULLY_PLAYED = 2
     }
 
     fun rootNode(): MediaItem {
@@ -209,10 +215,13 @@ class MediaItemFactory(
             .build()
     }
 
-    private fun forAudiobook(item: BaseItemDto, group: String? = null): MediaItem {
+    private fun forAudiobook(item: BaseItemDto, group: String? = null, parent: String? = null): MediaItem {
         val extras = Bundle()
         if (group != null) {
             extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
+        }
+        if (parent != null) {
+            extras.putString(PARENT_KEY, parent)
         }
         extras.putBoolean(IS_AUDIOBOOK_KEY, true)
         extras.putInt(
@@ -223,6 +232,7 @@ class MediaItemFactory(
             MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
             MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
         )
+        setCompletionStatus(extras, item)
 
         val metadata = MediaMetadata.Builder()
             .setTitle(item.name)
@@ -295,6 +305,7 @@ class MediaItemFactory(
 
         if (isAudiobook) {
             extras.putBoolean(IS_AUDIOBOOK_KEY, true)
+            setCompletionStatus(extras, item)
         }
 
         val metadata = MediaMetadata.Builder()
@@ -314,6 +325,24 @@ class MediaItemFactory(
             .setMediaMetadata(metadata)
             .setUri(audioStream)
             .build()
+    }
+
+    private fun setCompletionStatus(extras: Bundle, item: BaseItemDto) {
+        val userData = item.userData ?: return
+        when {
+            userData.played == true -> {
+                extras.putInt(EXTRA_COMPLETION_STATUS, COMPLETION_STATUS_FULLY_PLAYED)
+                extras.putDouble(EXTRA_COMPLETION_PERCENTAGE, 1.0)
+            }
+            (userData.playbackPositionTicks ?: 0) > 0 -> {
+                extras.putInt(EXTRA_COMPLETION_STATUS, COMPLETION_STATUS_PARTIALLY_PLAYED)
+                val percentage = (userData.playedPercentage ?: 0.0) / 100.0
+                extras.putDouble(EXTRA_COMPLETION_PERCENTAGE, percentage)
+            }
+            else -> {
+                extras.putInt(EXTRA_COMPLETION_STATUS, COMPLETION_STATUS_NOT_PLAYED)
+            }
+        }
     }
 
     private fun artUri(id: UUID): Uri {
@@ -354,7 +383,7 @@ class MediaItemFactory(
         return when (baseItemDto.type) {
             BaseItemKind.MUSIC_ARTIST -> forArtist(baseItemDto, group)
             BaseItemKind.MUSIC_ALBUM -> forAlbum(baseItemDto, group)
-            BaseItemKind.AUDIO_BOOK -> forAudiobook(baseItemDto, group)
+            BaseItemKind.AUDIO_BOOK -> forAudiobook(baseItemDto, group, parent)
             BaseItemKind.FOLDER -> forFolder(baseItemDto, group)
             BaseItemKind.PLAYLIST -> forPlaylist(baseItemDto, group)
             BaseItemKind.AUDIO -> forTrack(baseItemDto, group, parent, isAudiobook)
