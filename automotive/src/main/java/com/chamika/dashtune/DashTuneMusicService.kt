@@ -151,6 +151,9 @@ class DashTuneMusicService : MediaLibraryService() {
         playerListener = object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
+                    // Save audiobook position for the OLD track before transition
+                    reportAudiobookStopped(player)
+
                     PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService).edit {
                         putInt(PLAYLIST_INDEX_PREF, player.currentMediaItemIndex)
                     }
@@ -181,9 +184,9 @@ class DashTuneMusicService : MediaLibraryService() {
                         }
                     } else {
                         stopPlaybackPoll()
-                        if (isPlayingAudiobook && player.currentMediaItem != null) {
-                            reportAudiobookStopped(player)
-                        }
+                        // Save audiobook position — reportAudiobookStopped uses currentTrack
+                        // (the old item) so it's safe during transitions
+                        reportAudiobookStopped(player)
                     }
                 }
 
@@ -409,13 +412,19 @@ class DashTuneMusicService : MediaLibraryService() {
     }
 
     private fun reportAudiobookStopped(player: Player) {
-        val mediaId = player.currentMediaItem?.mediaId ?: return
-        val positionMs = player.currentPosition
+        // Use tracked state (currentTrack/currentPlaybackTime) which reflect the item
+        // that was actually playing, not player.currentMediaItem which may already
+        // point to the next item during transitions.
+        val track = currentTrack ?: player.currentMediaItem ?: return
+        val mediaId = track.mediaId
+        val isAudiobook = track.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+        if (!isAudiobook) return
+
+        val positionMs = if (currentTrack != null) currentPlaybackTime else player.currentPosition
         val ticks = positionMs * 10_000
         Log.i(LOG_TAG, "Audiobook stopped: $mediaId at ${positionMs}ms")
         serviceScope.launch {
             try {
-                // Use direct UserData API — playback session APIs don't persist positionTicks
                 jellyfinApi.itemsApi.updateItemUserData(
                     itemId = mediaId.toUUID(),
                     data = UpdateUserItemDataDto(playbackPositionTicks = ticks)
