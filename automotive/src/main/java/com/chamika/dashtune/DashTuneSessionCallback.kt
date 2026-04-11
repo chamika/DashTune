@@ -31,8 +31,8 @@ import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
-import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.chamika.dashtune.media.MediaItemResolver
 import com.chamika.dashtune.signin.SignInActivity
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -66,6 +66,7 @@ class DashTuneSessionCallback(
     }
 
     private lateinit var repository: MediaRepository
+    private lateinit var resolver: MediaItemResolver
 
     override fun onConnect(
         session: MediaSession,
@@ -97,6 +98,7 @@ class DashTuneSessionCallback(
             val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
             val tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
             repository = MediaRepository(mediaCacheDao, tree, itemFactory)
+            resolver = MediaItemResolver(repository)
         }
     }
 
@@ -209,7 +211,7 @@ class DashTuneSessionCallback(
         mediaItems: List<MediaItem>,
     ): ListenableFuture<List<MediaItem>> {
         Log.i(LOG_TAG, "onAddMediaItems $mediaItems")
-        return SuspendToFutureAdapter.launchFuture { resolveMediaItems(mediaItems) }
+        return SuspendToFutureAdapter.launchFuture { resolver.resolveMediaItems(mediaItems) }
     }
 
     override fun onSetMediaItems(
@@ -221,9 +223,9 @@ class DashTuneSessionCallback(
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
         Log.i(LOG_TAG, "onSetMediaItems ${mediaItems.size} items")
         return SuspendToFutureAdapter.launchFuture {
-            if (isSingleItemWithParent(mediaItems)) {
+            if (resolver.isSingleItemWithParent(mediaItems)) {
                 val singleItem = mediaItems[0]
-                val resolvedItems = expandSingleItem(singleItem)
+                val resolvedItems = resolver.expandSingleItem(singleItem)
 
                 val isAudiobookContent = resolvedItems.any {
                     it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
@@ -259,7 +261,7 @@ class DashTuneSessionCallback(
                 return@launchFuture mediaItemsWithStartPosition
             }
 
-            val resolvedItems = resolveMediaItems(mediaItems)
+            val resolvedItems = resolver.resolveMediaItems(mediaItems)
 
             val isAudiobookContent = resolvedItems.any {
                 it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
@@ -302,53 +304,6 @@ class DashTuneSessionCallback(
         PreferenceManager.getDefaultSharedPreferences(service).edit {
             putString(PLAYLIST_IDS_PREF, playlistIDs)
         }
-    }
-
-    private suspend fun isSingleItemWithParent(mediaItems: List<MediaItem>): Boolean {
-        if (mediaItems.size != 1) return false
-        val mediaId = mediaItems[0].mediaId
-        val item = repository.getItem(mediaId)
-        if (item.mediaMetadata.extras?.containsKey(PARENT_KEY) == true) return true
-        // Fall back to DB parent relationship (handles stale cache)
-        return repository.getContentParentId(mediaId) != null
-    }
-
-    private suspend fun expandSingleItem(item: MediaItem): List<MediaItem> {
-        val parentId = repository.getItem(item.mediaId).mediaMetadata.extras?.getString(PARENT_KEY)
-            ?: repository.getContentParentId(item.mediaId)
-            ?: return listOf(item)
-        val children = repository.getChildren(parentId)
-        return resolveMediaItems(children)
-    }
-
-    private suspend fun resolveMediaItems(mediaItems: List<MediaItem>): List<MediaItem> {
-        val playlist = mutableListOf<MediaItem>()
-
-        mediaItems.forEach {
-            val item = repository.getItem(it.mediaId)
-            val isExpandable = (item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_ALBUM ||
-                    item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_PLAYLIST) &&
-                    item.mediaMetadata.isBrowsable == true
-
-            if (isExpandable) {
-                val children = resolveMediaItems(repository.getChildren(item.mediaId))
-                if (children.isNotEmpty()) {
-                    children.forEach(playlist::add)
-                } else if (item.localConfiguration?.uri != null) {
-                    // Single-file audiobook with no children — play directly
-                    Log.i(LOG_TAG, "Playing single-file audiobook directly: ${item.mediaMetadata.title}")
-                    playlist.add(item)
-                } else {
-                    Log.w(LOG_TAG, "Empty children and no URI for ${item.mediaMetadata.title} (type=${item.mediaMetadata.mediaType}, playable=${item.mediaMetadata.isPlayable})")
-                }
-            } else if (item.mediaMetadata.isPlayable == true) {
-                playlist.add(item)
-            } else {
-                Log.e(LOG_TAG, "Cannot add media ${item.mediaMetadata.title}")
-            }
-        }
-
-        return playlist
     }
 
     override fun onSearch(
