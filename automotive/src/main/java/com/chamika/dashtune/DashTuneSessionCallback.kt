@@ -326,9 +326,10 @@ class DashTuneSessionCallback(
 
         mediaItems.forEach {
             val item = repository.getItem(it.mediaId)
+            val isAudiobook = item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
             val isExpandable = (item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_ALBUM ||
                     item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_PLAYLIST) &&
-                    item.mediaMetadata.isBrowsable == true
+                    (!isAudiobook || item.mediaMetadata.isBrowsable == true)
 
             if (isExpandable) {
                 val children = resolveMediaItems(repository.getChildren(item.mediaId))
