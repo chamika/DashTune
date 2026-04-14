@@ -445,6 +445,16 @@ class DashTuneMusicService : MediaLibraryService() {
                 var queued = 0
                 for (item in items) {
                     try {
+                        val id = item.id.toString()
+                        val existing = downloadManager.downloadIndex.getDownload(id)
+                        if (existing != null && existing.state in listOf(
+                                Download.STATE_COMPLETED,
+                                Download.STATE_DOWNLOADING,
+                                Download.STATE_QUEUED
+                            )
+                        ) {
+                            continue
+                        }
                         val streamUrl = jellyfinApi.universalAudioApi.getUniversalAudioStreamUrl(
                             item.id,
                             container = allowedContainers,
