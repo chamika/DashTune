@@ -24,6 +24,9 @@
         <item>500 MB</item>
         <item>1 GB</item>
         <item>2 GB</item>
+        <item>5 GB</item>
+        <item>10 GB</item>
+        <item>Unlimited</item>
     </string-array>
 
     <string-array name="cacheSizeValues">
@@ -32,6 +35,9 @@
         <item>500</item>
         <item>1024</item>
         <item>2048</item>
+        <item>5120</item>
+        <item>10240</item>
+        <item>-1</item>
     </string-array>
 
     <string-array name="prefetchCount">

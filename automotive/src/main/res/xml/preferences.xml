@@ -25,6 +25,12 @@
         android:summary="%s"
         android:title="@string/prefetch_count" />
 
+    <SwitchPreferenceCompat
+        android:defaultValue="false"
+        android:key="cache_favourites"
+        android:summary="@string/cache_favourites_summary"
+        android:title="@string/cache_favourites" />
+
     <MultiSelectListPreference
         android:defaultValue="@array/defaultBrowseCategories"
         android:entries="@array/browseCategories"
