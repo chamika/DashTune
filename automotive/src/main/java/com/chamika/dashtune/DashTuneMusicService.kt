@@ -15,6 +15,7 @@ import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.concurrent.futures.SuspendToFutureAdapter
 import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -24,6 +25,7 @@ import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.offline.Download
@@ -48,6 +50,9 @@ import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.playStateApi
+import org.jellyfin.sdk.api.client.extensions.universalAudioApi
+import org.jellyfin.sdk.model.api.BaseItemKind
+import org.jellyfin.sdk.model.api.ItemFilter
 import org.jellyfin.sdk.model.api.PlaybackStartInfo
 import org.jellyfin.sdk.model.api.PlaybackOrder
 import org.jellyfin.sdk.model.api.PlaybackStopInfo
@@ -95,6 +100,9 @@ class DashTuneMusicService : MediaLibraryService() {
         if (key == "browse_categories") {
             mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
         }
+        if (key == "cache_favourites") {
+            cacheFavouriteTracks()
+        }
     }
 
     // Offline cache
@@ -117,13 +125,18 @@ class DashTuneMusicService : MediaLibraryService() {
         // Setup offline cache
         val cacheSizeStr = PreferenceManager.getDefaultSharedPreferences(this)
             .getString("cache_size", "200") ?: "200"
-        val cacheSizeBytes = cacheSizeStr.toLong() * 1024L * 1024L
+        val cacheSizeMb = cacheSizeStr.toLong()
+        val cacheEvictor = if (cacheSizeMb < 0) {
+            NoOpCacheEvictor()
+        } else {
+            LeastRecentlyUsedCacheEvictor(cacheSizeMb * 1024L * 1024L)
+        }
 
         val cacheDir = File(cacheDir, "exoplayer_cache")
         val databaseProvider = StandaloneDatabaseProvider(this)
         downloadCache = SimpleCache(
             cacheDir,
-            LeastRecentlyUsedCacheEvictor(cacheSizeBytes),
+            cacheEvictor,
             databaseProvider
         )
 
@@ -369,6 +382,7 @@ class DashTuneMusicService : MediaLibraryService() {
         httpDataSourceFactory.setDefaultRequestProperties(headers)
 
         mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
+        cacheFavouriteTracks()
     }
 
     private fun prefetchNextTracks(player: Player, count: Int = 5) {
@@ -406,6 +420,55 @@ class DashTuneMusicService : MediaLibraryService() {
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "Failed to prefetch: $id", e)
                 FirebaseUtils.safeSetCustomKey("prefetch_track_id", id)
+                FirebaseUtils.safeRecordException(e)
+            }
+        }
+    }
+
+    private fun cacheFavouriteTracks() {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        if (!prefs.getBoolean("cache_favourites", false)) return
+        if (!accountManager.isAuthenticated) return
+
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val items = jellyfinApi.itemsApi.getItems(
+                    recursive = true,
+                    filters = listOf(ItemFilter.IS_FAVORITE),
+                    includeItemTypes = listOf(BaseItemKind.AUDIO)
+                ).content.items
+
+                val preferenceBitrate = prefs.getString("bitrate", "Direct stream")!!
+                val bitrate = if (preferenceBitrate == "Direct stream") null else preferenceBitrate.toInt()
+                val allowedContainers = listOf("flac", "mp3", "m4a", "aac", "ogg")
+
+                var queued = 0
+                for (item in items) {
+                    try {
+                        val streamUrl = jellyfinApi.universalAudioApi.getUniversalAudioStreamUrl(
+                            item.id,
+                            container = allowedContainers,
+                            audioBitRate = bitrate,
+                            maxStreamingBitrate = bitrate,
+                            transcodingContainer = "mp3",
+                            audioCodec = "mp3"
+                        )
+                        val downloadRequest = DownloadRequest.Builder(
+                            item.id.toString(),
+                            streamUrl.toUri()
+                        ).build()
+                        downloadManager.addDownload(downloadRequest)
+                        queued++
+                    } catch (e: Exception) {
+                        Log.w(LOG_TAG, "Failed to queue favourite for cache: ${item.id}", e)
+                    }
+                }
+                if (queued > 0) {
+                    downloadManager.resumeDownloads()
+                    Log.i(LOG_TAG, "Queued $queued favourite tracks for caching")
+                }
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to cache favourites", e)
                 FirebaseUtils.safeRecordException(e)
             }
         }
