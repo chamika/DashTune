@@ -70,6 +70,21 @@ class DashTuneMusicService : MediaLibraryService() {
 
     companion object {
         const val ACTION_STOP_PLAYBACK = "com.chamika.dashtune.ACTION_STOP_PLAYBACK"
+
+        /**
+         * Returns the appropriate [CacheEvictor][androidx.media3.datasource.cache.CacheEvictor]
+         * based on the stored preference value.
+         *
+         * @param cacheSizeMb MB value from the "cache_size" preference.
+         *   A value of -1 means unlimited (no eviction).
+         */
+        fun createCacheEvictor(cacheSizeMb: Long): androidx.media3.datasource.cache.CacheEvictor {
+            return if (cacheSizeMb < 0) {
+                NoOpCacheEvictor()
+            } else {
+                LeastRecentlyUsedCacheEvictor(cacheSizeMb * 1024L * 1024L)
+            }
+        }
     }
 
     @Inject
@@ -126,11 +141,7 @@ class DashTuneMusicService : MediaLibraryService() {
         val cacheSizeStr = PreferenceManager.getDefaultSharedPreferences(this)
             .getString("cache_size", "200") ?: "200"
         val cacheSizeMb = cacheSizeStr.toLong()
-        val cacheEvictor = if (cacheSizeMb < 0) {
-            NoOpCacheEvictor()
-        } else {
-            LeastRecentlyUsedCacheEvictor(cacheSizeMb * 1024L * 1024L)
-        }
+        val cacheEvictor = createCacheEvictor(cacheSizeMb)
 
         val cacheDir = File(cacheDir, "exoplayer_cache")
         val databaseProvider = StandaloneDatabaseProvider(this)
