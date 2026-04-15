@@ -121,66 +121,59 @@ class DashTuneMusicServiceTest {
 
     // --- audiobookPositionReporter guard condition tests ---
 
-    /**
-     * The [DashTuneMusicService.audiobookPositionReporter] Runnable only reschedules itself when
-     * BOTH [Player.isPlaying] AND [isPlayingAudiobook] are true.  We test the four combinations of
-     * that guard directly so regressions are caught without spinning up the full service.
-     */
     @Test
-    fun `reporter guard is true only when both isPlaying and isAudiobook are true`() {
-        assertTrue(isReporterGuardMet(isPlaying = true, isAudiobook = true))
+    fun `shouldScheduleReporter returns true only when both isPlaying and isAudiobook are true`() {
+        assertTrue(DashTuneMusicService.shouldScheduleReporter(isPlaying = true, isPlayingAudiobook = true))
     }
 
     @Test
-    fun `reporter guard is false when not playing`() {
-        assertFalse(isReporterGuardMet(isPlaying = false, isAudiobook = true))
+    fun `shouldScheduleReporter returns false when not playing`() {
+        assertFalse(DashTuneMusicService.shouldScheduleReporter(isPlaying = false, isPlayingAudiobook = true))
     }
 
     @Test
-    fun `reporter guard is false when not an audiobook`() {
-        assertFalse(isReporterGuardMet(isPlaying = true, isAudiobook = false))
+    fun `shouldScheduleReporter returns false when not an audiobook`() {
+        assertFalse(DashTuneMusicService.shouldScheduleReporter(isPlaying = true, isPlayingAudiobook = false))
     }
 
     @Test
-    fun `reporter guard is false when neither playing nor audiobook`() {
-        assertFalse(isReporterGuardMet(isPlaying = false, isAudiobook = false))
+    fun `shouldScheduleReporter returns false when neither playing nor audiobook`() {
+        assertFalse(DashTuneMusicService.shouldScheduleReporter(isPlaying = false, isPlayingAudiobook = false))
     }
 
-    // --- reportAudiobookProgress filter tests ---
-
-    /** Tests the audiobook metadata check that gates both reporters. */
-    @Test
-    fun `audiobook flag is detected correctly when IS_AUDIOBOOK_KEY is true`() {
-        val item = buildMediaItem(mediaId = "book-1", isAudiobook = true)
-        assertTrue(item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true)
-    }
+    // --- isAudiobookTrack tests ---
 
     @Test
-    fun `audiobook flag is absent for regular music items`() {
-        val item = buildMediaItem(mediaId = "track-1", isAudiobook = false)
-        assertFalse(item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true)
-    }
-
-    // --- helpers ---
-
-    /**
-     * Mirrors the guard expression inside [DashTuneMusicService.audiobookPositionReporter]:
-     * `p.isPlaying && isPlayingAudiobook`.
-     */
-    private fun isReporterGuardMet(isPlaying: Boolean, isAudiobook: Boolean): Boolean =
-        isPlaying && isAudiobook
-
-    private fun buildMediaItem(mediaId: String, isAudiobook: Boolean): MediaItem {
-        val extras = Bundle()
-        if (isAudiobook) extras.putBoolean(IS_AUDIOBOOK_KEY, true)
-        return MediaItem.Builder()
-            .setMediaId(mediaId)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle("Test $mediaId")
-                    .setExtras(extras)
-                    .build()
-            )
+    fun `isAudiobookTrack returns true when IS_AUDIOBOOK_KEY is set`() {
+        val extras = Bundle().apply { putBoolean(IS_AUDIOBOOK_KEY, true) }
+        val item = MediaItem.Builder()
+            .setMediaId("book-1")
+            .setMediaMetadata(MediaMetadata.Builder().setExtras(extras).build())
             .build()
+        assertTrue(DashTuneMusicService.isAudiobookTrack(item))
+    }
+
+    @Test
+    fun `isAudiobookTrack returns false for regular music item`() {
+        val item = MediaItem.Builder()
+            .setMediaId("track-1")
+            .setMediaMetadata(MediaMetadata.Builder().build())
+            .build()
+        assertFalse(DashTuneMusicService.isAudiobookTrack(item))
+    }
+
+    @Test
+    fun `isAudiobookTrack returns false when IS_AUDIOBOOK_KEY is explicitly false`() {
+        val extras = Bundle().apply { putBoolean(IS_AUDIOBOOK_KEY, false) }
+        val item = MediaItem.Builder()
+            .setMediaId("track-1")
+            .setMediaMetadata(MediaMetadata.Builder().setExtras(extras).build())
+            .build()
+        assertFalse(DashTuneMusicService.isAudiobookTrack(item))
+    }
+
+    @Test
+    fun `isAudiobookTrack returns false for null item`() {
+        assertFalse(DashTuneMusicService.isAudiobookTrack(null))
     }
 }

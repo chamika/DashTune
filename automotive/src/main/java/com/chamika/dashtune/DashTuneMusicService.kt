@@ -77,6 +77,18 @@ class DashTuneMusicService : MediaLibraryService() {
         /** Converts a playback position in milliseconds to Jellyfin's 100-ns tick units. */
         internal fun msToTicks(positionMs: Long): Long = positionMs * MILLISECONDS_TO_TICKS
 
+        /** Returns true when [track] has the audiobook metadata flag set. */
+        internal fun isAudiobookTrack(track: MediaItem?): Boolean =
+            track?.mediaMetadata?.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+
+        /**
+         * Returns true when the periodic audiobook position reporter should be (re)scheduled.
+         * Both conditions must hold: the player is actively playing AND the current content is
+         * an audiobook.
+         */
+        internal fun shouldScheduleReporter(isPlaying: Boolean, isPlayingAudiobook: Boolean): Boolean =
+            isPlaying && isPlayingAudiobook
+
         /**
          * Returns the appropriate [CacheEvictor][androidx.media3.datasource.cache.CacheEvictor]
          * based on the stored preference value.
@@ -263,7 +275,7 @@ class DashTuneMusicService : MediaLibraryService() {
 
         audiobookPositionReporter = Runnable {
             val p = mediaLibrarySession.player
-            if (p.isPlaying && isPlayingAudiobook) {
+            if (shouldScheduleReporter(p.isPlaying, isPlayingAudiobook)) {
                 reportAudiobookProgress()
                 handler.postDelayed(audiobookPositionReporter, AUDIOBOOK_POSITION_REPORT_INTERVAL_MS)
             }
@@ -522,8 +534,7 @@ class DashTuneMusicService : MediaLibraryService() {
         // point to the next item during transitions.
         val track = currentTrack ?: player.currentMediaItem ?: return
         val mediaId = track.mediaId
-        val isAudiobook = track.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
-        if (!isAudiobook) return
+        if (!isAudiobookTrack(track)) return
 
         val positionMs = if (currentTrack != null) currentPlaybackTime else player.currentPosition
         val ticks = msToTicks(positionMs)
@@ -543,8 +554,7 @@ class DashTuneMusicService : MediaLibraryService() {
 
     private fun reportAudiobookProgress() {
         val track = currentTrack ?: return
-        val isAudiobook = track.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
-        if (!isAudiobook) return
+        if (!isAudiobookTrack(track)) return
 
         val positionMs = currentPlaybackTime
         val ticks = msToTicks(positionMs)
