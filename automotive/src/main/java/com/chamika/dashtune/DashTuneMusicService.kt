@@ -71,8 +71,11 @@ class DashTuneMusicService : MediaLibraryService() {
     companion object {
         const val ACTION_STOP_PLAYBACK = "com.chamika.dashtune.ACTION_STOP_PLAYBACK"
 
-        private const val AUDIOBOOK_POSITION_REPORT_INTERVAL_MS = 30_000L
-        private const val MILLISECONDS_TO_TICKS = 10_000L
+        internal const val AUDIOBOOK_POSITION_REPORT_INTERVAL_MS = 30_000L
+        internal const val MILLISECONDS_TO_TICKS = 10_000L
+
+        /** Converts a playback position in milliseconds to Jellyfin's 100-ns tick units. */
+        internal fun msToTicks(positionMs: Long): Long = positionMs * MILLISECONDS_TO_TICKS
 
         /**
          * Returns the appropriate [CacheEvictor][androidx.media3.datasource.cache.CacheEvictor]
@@ -523,7 +526,7 @@ class DashTuneMusicService : MediaLibraryService() {
         if (!isAudiobook) return
 
         val positionMs = if (currentTrack != null) currentPlaybackTime else player.currentPosition
-        val ticks = positionMs * MILLISECONDS_TO_TICKS
+        val ticks = msToTicks(positionMs)
         Log.i(LOG_TAG, "Audiobook stopped: $mediaId at ${positionMs}ms")
         serviceScope.launch {
             try {
@@ -544,7 +547,7 @@ class DashTuneMusicService : MediaLibraryService() {
         if (!isAudiobook) return
 
         val positionMs = currentPlaybackTime
-        val ticks = positionMs * MILLISECONDS_TO_TICKS
+        val ticks = msToTicks(positionMs)
         Log.d(LOG_TAG, "Audiobook progress: ${track.mediaId} at ${positionMs}ms")
         serviceScope.launch {
             try {
