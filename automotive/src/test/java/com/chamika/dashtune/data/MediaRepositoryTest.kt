@@ -353,4 +353,100 @@ class MediaRepositoryTest {
         assertEquals(1, result.size)
         assertEquals("track-1", result[0].mediaId)
     }
+
+    // --- getContentParentId tests ---
+
+    @Test
+    fun `getContentParentId returns first non-static parent ID`() = runTest {
+        coEvery { dao.getParentIds("track-1") } returns listOf("album-1")
+
+        val result = repository.getContentParentId("track-1")
+
+        assertEquals("album-1", result)
+    }
+
+    @Test
+    fun `getContentParentId filters out static IDs and returns null when only static parents exist`() = runTest {
+        coEvery { dao.getParentIds("track-1") } returns listOf("LATEST_ALBUMS_ID", "ROOT_ID")
+
+        val result = repository.getContentParentId("track-1")
+
+        assertNull(result)
+    }
+
+    @Test
+    fun `getContentParentId returns null when no parent IDs are found`() = runTest {
+        coEvery { dao.getParentIds("track-1") } returns emptyList()
+
+        val result = repository.getContentParentId("track-1")
+
+        assertNull(result)
+    }
+
+    @Test
+    fun `getContentParentId skips static IDs and returns the first real parent`() = runTest {
+        coEvery { dao.getParentIds("track-1") } returns listOf("FAVOURITES_ID", "album-1")
+
+        val result = repository.getContentParentId("track-1")
+
+        assertEquals("album-1", result)
+    }
+
+    // --- getChildren for ROOT_ID tests ---
+
+    @Test
+    fun `getChildren for ROOT_ID always delegates directly to tree`() = runTest {
+        val rootChildren = listOf(
+            MediaItem.Builder()
+                .setMediaId("LATEST_ALBUMS_ID")
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle("Latest")
+                        .setIsBrowsable(true)
+                        .setIsPlayable(false)
+                        .build()
+                )
+                .build()
+        )
+        coEvery { tree.getChildren("ROOT_ID") } returns rootChildren
+
+        val result = repository.getChildren("ROOT_ID")
+
+        assertEquals(1, result.size)
+        assertEquals("LATEST_ALBUMS_ID", result[0].mediaId)
+    }
+
+    // --- getChildren network failure fallback test ---
+
+    @Test
+    fun `getChildren returns empty list when tree throws on network failure`() = runTest {
+        coEvery { dao.getChildrenByParent("album-offline") } returns emptyList()
+        coEvery { tree.getChildren("album-offline") } throws RuntimeException("Network unavailable")
+
+        val result = repository.getChildren("album-offline")
+
+        assertEquals(0, result.size)
+    }
+
+    // --- search delegate test ---
+
+    @Test
+    fun `search delegates to tree search`() = runTest {
+        val treeResults = listOf(
+            MediaItem.Builder()
+                .setMediaId("track-1")
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle("Search Result")
+                        .build()
+                )
+                .build()
+        )
+        coEvery { tree.search("query") } returns treeResults
+
+        val result = repository.search("query")
+
+        assertEquals(1, result.size)
+        assertEquals("track-1", result[0].mediaId)
+    }
 }
