@@ -71,6 +71,9 @@ class DashTuneMusicService : MediaLibraryService() {
     companion object {
         const val ACTION_STOP_PLAYBACK = "com.chamika.dashtune.ACTION_STOP_PLAYBACK"
 
+        private const val AUDIOBOOK_POSITION_REPORT_INTERVAL_MS = 30_000L
+        private const val MILLISECONDS_TO_TICKS = 10_000L
+
         /**
          * Returns the appropriate [CacheEvictor][androidx.media3.datasource.cache.CacheEvictor]
          * based on the stored preference value.
@@ -105,6 +108,7 @@ class DashTuneMusicService : MediaLibraryService() {
     private var isPlayingAudiobook: Boolean = false
 
     private lateinit var playbackPoll: Runnable
+    private lateinit var audiobookPositionReporter: Runnable
     private lateinit var playerListener: Player.Listener
 
     private lateinit var connectivityManager: ConnectivityManager
@@ -254,6 +258,14 @@ class DashTuneMusicService : MediaLibraryService() {
             }
         }
 
+        audiobookPositionReporter = Runnable {
+            val p = mediaLibrarySession.player
+            if (p.isPlaying && isPlayingAudiobook) {
+                reportAudiobookProgress()
+                handler.postDelayed(audiobookPositionReporter, AUDIOBOOK_POSITION_REPORT_INTERVAL_MS)
+            }
+        }
+
         callback = DashTuneSessionCallback(this, accountManager, jellyfinApi, mediaCacheDao)
 
         mediaLibrarySession = MediaLibrarySession.Builder(this, player, callback)
@@ -309,10 +321,15 @@ class DashTuneMusicService : MediaLibraryService() {
     private fun startPlaybackPoll() {
         handler.removeCallbacks(playbackPoll)
         handler.post(playbackPoll)
+        if (isPlayingAudiobook) {
+            handler.removeCallbacks(audiobookPositionReporter)
+            handler.postDelayed(audiobookPositionReporter, AUDIOBOOK_POSITION_REPORT_INTERVAL_MS)
+        }
     }
 
     private fun stopPlaybackPoll() {
         handler.removeCallbacks(playbackPoll)
+        handler.removeCallbacks(audiobookPositionReporter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -339,6 +356,7 @@ class DashTuneMusicService : MediaLibraryService() {
         mediaLibrarySession.player.removeListener(playerListener)
         mediaLibrarySession.player.release()
         handler.removeCallbacks(playbackPoll)
+        handler.removeCallbacks(audiobookPositionReporter)
 
         try {
             downloadManager.removeListener(downloadListener)
@@ -505,7 +523,7 @@ class DashTuneMusicService : MediaLibraryService() {
         if (!isAudiobook) return
 
         val positionMs = if (currentTrack != null) currentPlaybackTime else player.currentPosition
-        val ticks = positionMs * 10_000
+        val ticks = positionMs * MILLISECONDS_TO_TICKS
         Log.i(LOG_TAG, "Audiobook stopped: $mediaId at ${positionMs}ms")
         serviceScope.launch {
             try {
@@ -516,6 +534,26 @@ class DashTuneMusicService : MediaLibraryService() {
                 Log.i(LOG_TAG, "Audiobook position saved: $mediaId at ${positionMs}ms")
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "Failed to save audiobook position", e)
+            }
+        }
+    }
+
+    private fun reportAudiobookProgress() {
+        val track = currentTrack ?: return
+        val isAudiobook = track.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+        if (!isAudiobook) return
+
+        val positionMs = currentPlaybackTime
+        val ticks = positionMs * MILLISECONDS_TO_TICKS
+        Log.d(LOG_TAG, "Audiobook progress: ${track.mediaId} at ${positionMs}ms")
+        serviceScope.launch {
+            try {
+                jellyfinApi.itemsApi.updateItemUserData(
+                    itemId = track.mediaId.toUUID(),
+                    data = UpdateUserItemDataDto(playbackPositionTicks = ticks)
+                )
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to report audiobook progress", e)
             }
         }
     }
@@ -548,7 +586,7 @@ class DashTuneMusicService : MediaLibraryService() {
             jellyfinApi.playStateApi.reportPlaybackStopped(
                 PlaybackStopInfo(
                     itemId = currentTrack!!.mediaId.toUUID(),
-                    positionTicks = 10000 * currentPlaybackTime,
+                    positionTicks = MILLISECONDS_TO_TICKS * currentPlaybackTime,
                     failed = false
                 )
             )
