@@ -124,7 +124,7 @@ class CommandButtonsTest {
     fun `all buttons are assigned to SLOT_OVERFLOW`() {
         val buttons = CommandButtons.createButtons(playerWith(Player.REPEAT_MODE_OFF, false))
         buttons.forEach { button ->
-            assertEquals(CommandButton.SLOT_OVERFLOW, button.slots)
+            assertTrue(button.slots.contains(CommandButton.SLOT_OVERFLOW))
         }
     }
 

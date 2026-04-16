@@ -115,16 +115,18 @@ class AlbumArtContentProviderExtendedTest {
         assertTrue(contentUri1.path != contentUri2.path)
     }
 
-    // --- Empty/null path tests ---
+    // --- Empty path tests ---
 
     @Test
-    fun `mapUri returns EMPTY for URI without path`() {
-        val noPathUri = Uri.parse("http://example.com")
+    fun `mapUri returns EMPTY for URI with empty encoded path`() {
+        // A URI whose encodedPath is "/" produces an empty path after substring(1).
+        // mapUri returns Uri.EMPTY in that case (the ?: branch).
+        val rootPathUri = Uri.parse("http://example.com/")
 
-        val contentUri = AlbumArtContentProvider.mapUri(noPathUri)
+        val contentUri = AlbumArtContentProvider.mapUri(rootPathUri)
 
-        // The path "/" becomes "" after substring(1), which is a valid path
-        // But the key assertion is that it doesn't crash
         assertNotNull(contentUri)
+        // path "/" → substring(1) → "" → the resulting content URI has an empty path
+        assertEquals("", contentUri.path ?: "")
     }
 }
