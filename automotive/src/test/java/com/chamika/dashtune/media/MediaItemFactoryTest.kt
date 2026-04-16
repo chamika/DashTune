@@ -67,7 +67,7 @@ class MediaItemFactoryTest {
      */
     private fun userItemData(
         played: Boolean = false,
-        playbackPositionTicks: Long? = null,
+        playbackPositionTicks: Long = 0L,
         playedPercentage: Double? = null,
         isFavorite: Boolean = false,
     ): UserItemDataDto = UserItemDataDto(
@@ -75,13 +75,13 @@ class MediaItemFactoryTest {
         playedPercentage = playedPercentage,
         unplayedItemCount = null,
         playbackPositionTicks = playbackPositionTicks,
-        playCount = null,
+        playCount = 0,
         isFavorite = isFavorite,
         likes = null,
         lastPlayedDate = null,
         played = played,
         key = "",
-        itemId = null,
+        itemId = UUID.randomUUID(),
     )
 
     private fun baseItem(
