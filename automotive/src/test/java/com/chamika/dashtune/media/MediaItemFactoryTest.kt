@@ -60,6 +60,30 @@ class MediaItemFactoryTest {
         factory = MediaItemFactory(context, jellyfinApi, 256)
     }
 
+    /**
+     * Builds a [UserItemDataDto] with all required fields specified.
+     * The Jellyfin SDK 1.8.x does not provide default values so every
+     * field must be provided explicitly.
+     */
+    private fun userItemData(
+        played: Boolean = false,
+        playbackPositionTicks: Long? = null,
+        playedPercentage: Double? = null,
+        isFavorite: Boolean = false,
+    ): UserItemDataDto = UserItemDataDto(
+        rating = null,
+        playedPercentage = playedPercentage,
+        unplayedItemCount = null,
+        playbackPositionTicks = playbackPositionTicks,
+        playCount = null,
+        isFavorite = isFavorite,
+        likes = null,
+        lastPlayedDate = null,
+        played = played,
+        key = "",
+        itemId = null,
+    )
+
     private fun baseItem(
         type: BaseItemKind,
         name: String = "Test Item",
@@ -301,7 +325,7 @@ class MediaItemFactoryTest {
             id = UUID.randomUUID(),
             type = BaseItemKind.AUDIO_BOOK,
             name = "Played Book",
-            userData = UserItemDataDto(played = true)
+            userData = userItemData(played = true)
         )
         val item = factory.create(dto)
 
@@ -322,7 +346,7 @@ class MediaItemFactoryTest {
             id = UUID.randomUUID(),
             type = BaseItemKind.AUDIO_BOOK,
             name = "In-Progress Book",
-            userData = UserItemDataDto(
+            userData = userItemData(
                 playbackPositionTicks = 50_000L,
                 playedPercentage = 40.0
             )
@@ -346,7 +370,7 @@ class MediaItemFactoryTest {
             id = UUID.randomUUID(),
             type = BaseItemKind.AUDIO_BOOK,
             name = "Unplayed Book",
-            userData = UserItemDataDto(played = false, playbackPositionTicks = 0L)
+            userData = userItemData(played = false, playbackPositionTicks = 0L)
         )
         val item = factory.create(dto)
 
@@ -377,7 +401,7 @@ class MediaItemFactoryTest {
             id = UUID.randomUUID(),
             type = BaseItemKind.AUDIO,
             name = "Chapter 1",
-            userData = UserItemDataDto(
+            userData = userItemData(
                 playbackPositionTicks = 10_000L,
                 playedPercentage = 25.0
             )
