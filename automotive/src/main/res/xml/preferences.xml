@@ -40,6 +40,10 @@
         android:title="@string/browse_categories" />
 
     <Preference
+        android:key="sync_library"
+        android:title="@string/sync_library" />
+
+    <Preference
         android:key="version"
         android:title="@string/app_version" />
 

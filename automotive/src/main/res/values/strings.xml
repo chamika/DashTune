@@ -36,4 +36,8 @@
     <string name="max_categories_warning">Select at most 4 categories</string>
     <string name="cache_favourites">Cache favourites</string>
     <string name="cache_favourites_summary">Pre-download all favourite songs for offline playback</string>
+    <string name="sync_library">Sync library</string>
+    <string name="sync_library_never">Never synced</string>
+    <string name="sync_library_last_synced">Last synced: %s</string>
+    <string name="sync_failed">Sync failed</string>
 </resources>
