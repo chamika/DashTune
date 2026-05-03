@@ -423,8 +423,11 @@ class DashTuneSessionCallback(
                         }
                         (session as MediaLibraryService.MediaLibrarySession).notifyChildrenChanged(ROOT_ID, 4, null)
                         android.widget.Toast.makeText(service, R.string.library_synced, android.widget.Toast.LENGTH_SHORT).show()
+                        SessionResult(SessionResult.RESULT_SUCCESS)
+                    } else {
+                        android.widget.Toast.makeText(service, R.string.sync_failed, android.widget.Toast.LENGTH_SHORT).show()
+                        SessionResult(SessionError.ERROR_UNKNOWN)
                     }
-                    SessionResult(SessionResult.RESULT_SUCCESS)
                 }
             }
         }
