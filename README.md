@@ -2,6 +2,8 @@
 
 A fully-featured Jellyfin music and audiobook player for Android Automotive OS (AAOS) with offline download capabilities.
 
+[<img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get it on Google Play" height="80">](https://play.google.com/store/apps/details?id=com.chamika.dashtune)
+
 ## Overview
 
 DashTune brings the complete Jellyfin music library experience to your car's infotainment system. Stream your music collection, browse audiobooks, download tracks for offline playback, and enjoy seamless integration with Android Automotive OS.
