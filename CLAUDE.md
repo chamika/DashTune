@@ -15,6 +15,24 @@ Jellyfin music and audiobook player for Android Automotive OS (AAOS) with offlin
 ./gradlew :automotive:installDebug
 ```
 
+## Releasing
+
+1. Bump `versionCode` (increment by 1) and `versionName` (semver) in `automotive/build.gradle.kts`
+2. Commit **only** `automotive/build.gradle.kts` with this exact message format:
+
+```
+Release v<versionName>(<versionCode>)
+
+<Short one-line description of the release>
+
+Full release notes:
+
+- <bullet 1>
+- <bullet 2>
+```
+
+Example: `Release v1.2.2(18)`
+
 - **Min SDK**: 28 (Android 9)
 - **Target SDK**: 36
 - **Compile SDK**: 36
