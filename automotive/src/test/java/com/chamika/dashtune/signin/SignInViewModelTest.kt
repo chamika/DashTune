@@ -2,7 +2,6 @@ package com.chamika.dashtune.signin
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
 import com.chamika.dashtune.auth.JellyfinAccountManager
-import com.google.firebase.crashlytics.FirebaseCrashlytics
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
@@ -52,9 +51,6 @@ class SignInViewModelTest {
         accountManager = mockk(relaxed = true)
         apiClient = mockk(relaxed = true)
         systemApi = mockk(relaxed = true)
-
-        mockkStatic(FirebaseCrashlytics::class)
-        every { FirebaseCrashlytics.getInstance() } returns mockk(relaxed = true)
 
         // Stub options before createApi so createApi$default can resolve default parameters
         jellyfin = mockk(relaxed = true)
