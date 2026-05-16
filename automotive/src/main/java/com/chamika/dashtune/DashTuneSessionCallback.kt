@@ -37,8 +37,10 @@ import com.chamika.dashtune.signin.SignInActivity
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.itemsApi
@@ -416,7 +418,7 @@ class DashTuneSessionCallback(
 
             SYNC_COMMAND -> {
                 return SuspendToFutureAdapter.launchFuture {
-                    val success = repository.sync()
+                    val success = withContext(Dispatchers.IO) { repository.sync() }
                     if (success) {
                         PreferenceManager.getDefaultSharedPreferences(service).edit {
                             putLong("last_sync_timestamp", System.currentTimeMillis())
