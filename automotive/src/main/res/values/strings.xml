@@ -40,4 +40,6 @@
     <string name="sync_library_never">Never synced</string>
     <string name="sync_library_last_synced">Last synced: %s</string>
     <string name="sync_failed">Sync failed</string>
+    <string name="retry">Retry</string>
+    <string name="library_unavailable">Library unavailable. Check your connection and retry.</string>
 </resources>

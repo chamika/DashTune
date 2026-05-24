@@ -81,6 +81,10 @@ class MediaRepository(
         return tree.search(query)
     }
 
+    fun invalidateCache() {
+        tree.invalidateCache()
+    }
+
     suspend fun sync(): Boolean = syncMutex.withLock {
         val sectionIds = tree.getActiveCategoryIds()
         val allEntities = mutableListOf<CachedMediaItemEntity>()
