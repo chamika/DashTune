@@ -455,21 +455,35 @@ class DashTuneSessionCallback(
             try {
                 val prefs = PreferenceManager.getDefaultSharedPreferences(service)
 
-                val mediaItemsToRestore = prefs
+                val savedIds = prefs
                     .getString(PLAYLIST_IDS_PREF, "")
                     ?.split(",")
                     ?.filter { it.isNotEmpty() }
-                    ?.map { async { repository.getItem(it) } }
-                    ?.awaitAll() ?: listOf()
+                    ?: emptyList()
+
+                val playableIds = savedIds.filter { service.isTrackCachedOrOnline(it) }
+                if (playableIds.size < savedIds.size) {
+                    Log.i(LOG_TAG, "Skipping ${savedIds.size - playableIds.size} unplayable tracks (offline + uncached)")
+                }
+
+                val mediaItemsToRestore = playableIds
+                    .map { async { repository.getItem(it) } }
+                    .awaitAll()
 
                 Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
                 FirebaseUtils.safeLog("Restoring playback: index=${prefs.getInt(PLAYLIST_INDEX_PREF, 0)}, trackCount=${mediaItemsToRestore.size}")
 
-                MediaSession.MediaItemsWithStartPosition(
-                    mediaItemsToRestore,
-                    prefs.getInt(PLAYLIST_INDEX_PREF, 0),
-                    prefs.getLong(PLAYLIST_TRACK_POSITON_MS_PREF, 0),
-                )
+                if (mediaItemsToRestore.isEmpty()) {
+                    MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
+                } else {
+                    val savedIndex = prefs.getInt(PLAYLIST_INDEX_PREF, 0)
+                        .coerceIn(0, mediaItemsToRestore.lastIndex)
+                    MediaSession.MediaItemsWithStartPosition(
+                        mediaItemsToRestore,
+                        savedIndex,
+                        prefs.getLong(PLAYLIST_TRACK_POSITON_MS_PREF, 0),
+                    )
+                }
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to resume playback", e)
                 FirebaseUtils.safeRecordException(e)

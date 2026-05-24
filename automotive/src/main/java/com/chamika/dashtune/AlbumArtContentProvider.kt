@@ -14,12 +14,16 @@ import okio.buffer
 import okio.sink
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class AlbumArtContentProvider : ContentProvider() {
 
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
 
     companion object {
         private val uriMap = mutableMapOf<Uri, Uri>()
@@ -86,28 +90,38 @@ class AlbumArtContentProvider : ContentProvider() {
             .build()
 
         Log.d(LOG_TAG, "Downloading $remoteUri ...")
-        client.newCall(request).execute().use {
-            if (it.code == 200) {
-                Log.d(LOG_TAG, "Downloaded $remoteUri")
-                val source = it.body.source()
-                source.request(Long.MAX_VALUE)
+        try {
+            client.newCall(request).execute().use {
+                if (it.code == 200) {
+                    Log.d(LOG_TAG, "Downloaded $remoteUri")
+                    val source = it.body.source()
+                    source.request(Long.MAX_VALUE)
 
-                val sink = tmpFile.sink().buffer()
-                sink.writeAll(source)
-                sink.flush()
-                sink.close()
+                    val sink = tmpFile.sink().buffer()
+                    sink.writeAll(source)
+                    sink.flush()
+                    sink.close()
 
-                tmpFile.renameTo(file)
-            } else {
-                Log.w(LOG_TAG, "Failed to download $remoteUri: \n ${it.code} - ${it.body}")
-                FirebaseUtils.safeSetCustomKey("album_art_path", remoteUri.path ?: "unknown")
-                FirebaseUtils.safeRecordException(Exception("Album art download failed: HTTP ${it.code}"))
+                    tmpFile.renameTo(file)
+                } else {
+                    Log.w(LOG_TAG, "Failed to download $remoteUri: \n ${it.code} - ${it.body}")
+                    FirebaseUtils.safeSetCustomKey("album_art_path", remoteUri.path ?: "unknown")
+                    FirebaseUtils.safeRecordException(Exception("Album art download failed: HTTP ${it.code}"))
+                }
             }
-
-            inProgress.get(remoteUri)?.countDown()
-            inProgress.remove(remoteUri)
+        } catch (e: IOException) {
+            Log.w(LOG_TAG, "Network error downloading $remoteUri", e)
+        } finally {
+            tmpFile.delete()
+            synchronized(inProgress) {
+                inProgress[remoteUri]?.countDown()
+                inProgress.remove(remoteUri)
+            }
         }
 
+        if (!file.exists()) {
+            throw FileNotFoundException(uri.path)
+        }
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
     }
 
