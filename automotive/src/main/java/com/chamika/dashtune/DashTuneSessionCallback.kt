@@ -124,28 +124,25 @@ class DashTuneSessionCallback(
     ): ListenableFuture<LibraryResult<MediaItem>> {
         Log.i(LOG_TAG, "onGetRoot")
 
-        if (!accountManager.isAuthenticated) {
-            return Futures.immediateFuture(
-                LibraryResult.ofError(
-                    SessionError(
-                        SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED,
-                        service.getString(R.string.sign_in_to_your_jellyfin_server)
-                    ),
-                    MediaLibraryService.LibraryParams.Builder()
-                        .setExtras(authenticationExtras()).build()
-                )
-            )
-        }
-
         val artSize = params?.extras?.getInt(EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS)
         ensureTreeInitialized(artSize)
 
+        // Always return a valid root MediaItem. Returning LibraryResult.ofError here
+        // causes the Media3 -> legacy MediaBrowserService bridge to deliver a null root
+        // to the AAOS Media Center, which then fails with onConnectFailed and shows
+        // a blank screen instead of the sign-in button. The unauthenticated case is
+        // surfaced via the auth extras on the root params and the auth check in
+        // onGetChildren.
         return SuspendToFutureAdapter.launchFuture {
             try {
-                LibraryResult.ofItem(
-                    repository.getItem(ROOT_ID),
+                val rootItem = repository.getItem(ROOT_ID)
+                val outParams = if (!accountManager.isAuthenticated) {
+                    MediaLibraryService.LibraryParams.Builder()
+                        .setExtras(authenticationExtras()).build()
+                } else {
                     params
-                )
+                }
+                LibraryResult.ofItem(rootItem, outParams)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get library root", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_library_root")
