@@ -45,6 +45,10 @@ class JellyfinMediaTree(
         .maximumSize(1000)
         .build()
 
+    fun invalidateCache() {
+        mediaItems.invalidateAll()
+    }
+
     fun getActiveCategoryIds(): List<String> {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val defaults = setOf("latest", "favourites", "books", "playlists")

@@ -65,10 +65,21 @@ class DashTuneSessionCallback(
         const val PLAYLIST_IDS_PREF = "playlistIds"
         const val PLAYLIST_INDEX_PREF = "playlistIndex"
         const val PLAYLIST_TRACK_POSITON_MS_PREF = "playlistTrackPositionMs"
+
+        private const val BROWSE_TIMEOUT_MS = 8_000L
     }
 
     private lateinit var repository: MediaRepository
     private lateinit var resolver: MediaItemResolver
+    private val initLock = Any()
+
+    fun invalidateCache() {
+        synchronized(initLock) {
+            if (::repository.isInitialized) {
+                repository.invalidateCache()
+            }
+        }
+    }
 
     override fun onConnect(
         session: MediaSession,
@@ -93,14 +104,16 @@ class DashTuneSessionCallback(
     }
 
     private fun ensureTreeInitialized(artSizeHint: Int? = null) {
-        if (!::repository.isInitialized) {
-            val artSize = artSizeHint ?: 1024
-            Log.d(LOG_TAG, "Initializing media tree with art size: $artSize")
+        synchronized(initLock) {
+            if (!::repository.isInitialized) {
+                val artSize = artSizeHint ?: 1024
+                Log.d(LOG_TAG, "Initializing media tree with art size: $artSize")
 
-            val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
-            val tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
-            repository = MediaRepository(mediaCacheDao, tree, itemFactory)
-            resolver = MediaItemResolver(repository)
+                val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
+                val tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
+                repository = MediaRepository(mediaCacheDao, tree, itemFactory)
+                resolver = MediaItemResolver(repository)
+            }
         }
     }
 
@@ -110,6 +123,19 @@ class DashTuneSessionCallback(
         params: MediaLibraryService.LibraryParams?
     ): ListenableFuture<LibraryResult<MediaItem>> {
         Log.i(LOG_TAG, "onGetRoot")
+
+        if (!accountManager.isAuthenticated) {
+            return Futures.immediateFuture(
+                LibraryResult.ofError(
+                    SessionError(
+                        SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED,
+                        service.getString(R.string.sign_in_to_your_jellyfin_server)
+                    ),
+                    MediaLibraryService.LibraryParams.Builder()
+                        .setExtras(authenticationExtras()).build()
+                )
+            )
+        }
 
         val artSize = params?.extras?.getInt(EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS)
         ensureTreeInitialized(artSize)
@@ -124,7 +150,13 @@ class DashTuneSessionCallback(
                 Log.e(LOG_TAG, "Failed to get library root", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_library_root")
                 FirebaseUtils.safeRecordException(e)
-                LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, ""))
+                LibraryResult.ofError(
+                    SessionError(
+                        SessionError.ERROR_UNKNOWN,
+                        service.getString(R.string.library_unavailable)
+                    ),
+                    retryErrorParams()
+                )
             }
         }
     }
@@ -151,15 +183,26 @@ class DashTuneSessionCallback(
             )
         }
 
+        ensureTreeInitialized()
+
         return SuspendToFutureAdapter.launchFuture {
             try {
-                LibraryResult.ofItemList(repository.getChildren(parentId), params)
+                val children = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
+                    repository.getChildren(parentId)
+                } ?: throw java.util.concurrent.TimeoutException("Browse timed out after ${BROWSE_TIMEOUT_MS}ms")
+                LibraryResult.ofItemList(children, params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get children for $parentId", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_children")
                 FirebaseUtils.safeSetCustomKey("parent_id", parentId)
                 FirebaseUtils.safeRecordException(e)
-                LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media items"))
+                LibraryResult.ofError(
+                    SessionError(
+                        SessionError.ERROR_UNKNOWN,
+                        service.getString(R.string.library_unavailable)
+                    ),
+                    retryErrorParams()
+                )
             }
         }
     }
@@ -186,12 +229,37 @@ class DashTuneSessionCallback(
         }
     }
 
+    private fun retryExtras(): Bundle {
+        return Bundle().also {
+            it.putString(
+                EXTRAS_KEY_ERROR_RESOLUTION_ACTION_LABEL_COMPAT,
+                service.getString(R.string.retry)
+            )
+
+            val refreshIntent = Intent(service, DashTuneMusicService::class.java).apply {
+                action = DashTuneMusicService.ACTION_REFRESH_LIBRARY
+            }
+            val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            val pending = PendingIntent.getService(service, 0, refreshIntent, flags)
+
+            it.putParcelable(EXTRAS_KEY_ERROR_RESOLUTION_ACTION_INTENT_COMPAT, pending)
+            it.putParcelable(EXTRAS_KEY_ERROR_RESOLUTION_USING_CAR_APP_LIBRARY_INTENT_COMPAT, pending)
+        }
+    }
+
+    private fun retryErrorParams(): MediaLibraryService.LibraryParams {
+        return MediaLibraryService.LibraryParams.Builder()
+            .setExtras(retryExtras())
+            .build()
+    }
+
     override fun onGetItem(
         session: MediaLibraryService.MediaLibrarySession,
         browser: MediaSession.ControllerInfo,
         mediaId: String,
     ): ListenableFuture<LibraryResult<MediaItem>> {
         Log.i(LOG_TAG, "onGetItem $mediaId")
+        ensureTreeInitialized()
         return SuspendToFutureAdapter.launchFuture {
             try {
                 LibraryResult.ofItem(
@@ -202,7 +270,13 @@ class DashTuneSessionCallback(
                 Log.e(LOG_TAG, "Failed to get item $mediaId", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_item")
                 FirebaseUtils.safeRecordException(e)
-                LibraryResult.ofError(SessionError(SessionError.ERROR_UNKNOWN, "Failed to get media item"))
+                LibraryResult.ofError(
+                    SessionError(
+                        SessionError.ERROR_UNKNOWN,
+                        service.getString(R.string.library_unavailable)
+                    ),
+                    retryErrorParams()
+                )
             }
         }
     }
@@ -314,9 +388,12 @@ class DashTuneSessionCallback(
         query: String,
         params: MediaLibraryService.LibraryParams?
     ): ListenableFuture<LibraryResult<Void>> {
+        ensureTreeInitialized()
         return SuspendToFutureAdapter.launchFuture {
             try {
-                val results = repository.search(query).size
+                val results = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
+                    repository.search(query).size
+                } ?: throw java.util.concurrent.TimeoutException("Search timed out after ${BROWSE_TIMEOUT_MS}ms")
                 session.notifySearchResultChanged(browser, query, results, params)
                 LibraryResult.ofVoid(params)
             } catch (e: Exception) {
@@ -324,7 +401,13 @@ class DashTuneSessionCallback(
                 FirebaseUtils.safeSetCustomKey("failed_operation", "search")
                 FirebaseUtils.safeSetCustomKey("search_query", query)
                 FirebaseUtils.safeRecordException(e)
-                LibraryResult.ofVoid()
+                LibraryResult.ofError(
+                    SessionError(
+                        SessionError.ERROR_UNKNOWN,
+                        service.getString(R.string.library_unavailable)
+                    ),
+                    retryErrorParams()
+                )
             }
         }
     }
@@ -337,16 +420,25 @@ class DashTuneSessionCallback(
         pageSize: Int,
         params: MediaLibraryService.LibraryParams?
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+        ensureTreeInitialized()
         return SuspendToFutureAdapter.launchFuture {
             try {
-                val results = repository.search(query)
+                val results = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
+                    repository.search(query)
+                } ?: throw java.util.concurrent.TimeoutException("Search timed out after ${BROWSE_TIMEOUT_MS}ms")
                 LibraryResult.ofItemList(results, params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_search_result")
                 FirebaseUtils.safeSetCustomKey("search_query", query)
                 FirebaseUtils.safeRecordException(e)
-                LibraryResult.ofItemList(emptyList(), params)
+                LibraryResult.ofError(
+                    SessionError(
+                        SessionError.ERROR_UNKNOWN,
+                        service.getString(R.string.library_unavailable)
+                    ),
+                    retryErrorParams()
+                )
             }
         }
     }

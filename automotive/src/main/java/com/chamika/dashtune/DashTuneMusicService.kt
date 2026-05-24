@@ -70,6 +70,7 @@ class DashTuneMusicService : MediaLibraryService() {
 
     companion object {
         const val ACTION_STOP_PLAYBACK = "com.chamika.dashtune.ACTION_STOP_PLAYBACK"
+        const val ACTION_REFRESH_LIBRARY = "com.chamika.dashtune.ACTION_REFRESH_LIBRARY"
 
         internal const val AUDIOBOOK_POSITION_REPORT_INTERVAL_MS = 30_000L
         internal const val MILLISECONDS_TO_TICKS = 10_000L
@@ -356,6 +357,16 @@ class DashTuneMusicService : MediaLibraryService() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_REFRESH_LIBRARY) {
+            Log.i(LOG_TAG, "Refresh library requested")
+            if (::callback.isInitialized) {
+                callback.invalidateCache()
+            }
+            if (::mediaLibrarySession.isInitialized) {
+                mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
+            }
+            return START_NOT_STICKY
+        }
         return super.onStartCommand(intent, flags, startId)
     }
 
@@ -425,6 +436,9 @@ class DashTuneMusicService : MediaLibraryService() {
 
         httpDataSourceFactory.setDefaultRequestProperties(headers)
 
+        if (::callback.isInitialized) {
+            callback.invalidateCache()
+        }
         mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
         cacheFavouriteTracks()
     }
