@@ -32,6 +32,8 @@ import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.preference.PreferenceManager
@@ -177,7 +179,14 @@ class DashTuneMusicService : MediaLibraryService() {
             .setUpstreamDataSourceFactory(httpDataSourceFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
-        mediaSourceFactory = DefaultMediaSourceFactory(cacheDataSourceFactory)
+        // Disable ID3 metadata parsing on the transcoded MP3 streams. The app fully owns
+        // now-playing metadata via MediaItem.mediaMetadata, so the in-band ID3 pass only adds
+        // a redundant, late onMediaMetadataChanged event per transition. That extra publish
+        // races the AAOS Media Center's two now-playing surfaces and can leave them showing
+        // different tracks (issue #24).
+        val extractorsFactory = DefaultExtractorsFactory()
+            .setMp3ExtractorFlags(Mp3Extractor.FLAG_DISABLE_ID3_METADATA)
+        mediaSourceFactory = DefaultMediaSourceFactory(cacheDataSourceFactory, extractorsFactory)
 
         // Setup download manager for prefetching
         val downloadExecutor = Executors.newFixedThreadPool(6)
@@ -193,6 +202,16 @@ class DashTuneMusicService : MediaLibraryService() {
         }
 
         playerListener = object : Player.Listener {
+            override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) {
+                // Verifies issue #24: each transition should produce exactly one metadata
+                // publish, and the title must match the current item id (no stale event).
+                Log.d(
+                    LOG_TAG,
+                    "onMediaMetadataChanged: title=${mediaMetadata.title} " +
+                            "currentId=${mediaLibrarySession.player.currentMediaItem?.mediaId}"
+                )
+            }
+
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 val p = mediaLibrarySession.player
                 val failedId = p.currentMediaItem?.mediaId
