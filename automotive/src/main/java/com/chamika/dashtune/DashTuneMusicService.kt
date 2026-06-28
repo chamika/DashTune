@@ -193,6 +193,23 @@ class DashTuneMusicService : MediaLibraryService() {
         }
 
         playerListener = object : Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                val p = mediaLibrarySession.player
+                val failedId = p.currentMediaItem?.mediaId
+                Log.e(LOG_TAG, "Player error on $failedId: ${error.errorCodeName}", error)
+                FirebaseUtils.safeSetCustomKey("player_error_code", error.errorCodeName)
+                FirebaseUtils.safeSetCustomKey("failed_track_id", failedId ?: "")
+                FirebaseUtils.safeRecordException(error)
+
+                if (p.hasNextMediaItem()) {
+                    p.seekToNextMediaItem()
+                    p.prepare()
+                } else {
+                    p.stop()
+                    p.clearMediaItems()
+                }
+            }
+
             override fun onEvents(player: Player, events: Player.Events) {
                 if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
                     // Save audiobook position for the OLD track before transition
@@ -417,6 +434,24 @@ class DashTuneMusicService : MediaLibraryService() {
 
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
         super.onUpdateNotification(session, startInForegroundRequired)
+    }
+
+    fun isTrackCachedOrOnline(mediaId: String): Boolean {
+        if (hasInternet()) return true
+        return try {
+            val state = downloadManager.downloadIndex.getDownload(mediaId)?.state
+            state == Download.STATE_COMPLETED
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to check cache for $mediaId", e)
+            false
+        }
+    }
+
+    private fun hasInternet(): Boolean {
+        val net = connectivityManager.activeNetwork ?: return false
+        val caps = connectivityManager.getNetworkCapabilities(net) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     fun onLogin() {
