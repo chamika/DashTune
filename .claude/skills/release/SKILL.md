@@ -83,6 +83,8 @@ Full release notes:
 - Album art now falls back to a placeholder when offline instead of failing
 ```
 
+Make the release commit on the **current working branch** — do not switch to or commit directly on `main`. The release rides along with whatever feature branch is checked out (it lands on `main` later when that branch is merged), so any not-yet-merged changes on the branch are part of this release and must be reflected in the notes.
+
 Stage and commit only the gradle file:
 
 ```bash
