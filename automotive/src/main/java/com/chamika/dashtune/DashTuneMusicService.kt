@@ -77,6 +77,15 @@ class DashTuneMusicService : MediaLibraryService() {
         internal const val AUDIOBOOK_POSITION_REPORT_INTERVAL_MS = 30_000L
         internal const val MILLISECONDS_TO_TICKS = 10_000L
 
+        /**
+         * How long playback may stay suppressed by a transient audio-focus loss before we treat
+         * it as stuck and re-request focus. Normal transient losses (nav prompts, chimes) resolve
+         * with an AUDIOFOCUS_GAIN well within this window; a value this large only fires when focus
+         * was never returned, which is the freeze users hit (issue: player detaches until another
+         * app grabs focus).
+         */
+        internal const val FOCUS_RECOVERY_DELAY_MS = 8_000L
+
         /** Converts a playback position in milliseconds to Jellyfin's 100-ns tick units. */
         internal fun msToTicks(positionMs: Long): Long = positionMs * MILLISECONDS_TO_TICKS
 
@@ -128,6 +137,7 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var playbackPoll: Runnable
     private lateinit var audiobookPositionReporter: Runnable
     private lateinit var playerListener: Player.Listener
+    private lateinit var focusRecovery: Runnable
 
     private lateinit var connectivityManager: ConnectivityManager
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -212,6 +222,18 @@ class DashTuneMusicService : MediaLibraryService() {
                 )
             }
 
+            override fun onPlaybackSuppressionReasonChanged(reason: Int) {
+                val p = mediaLibrarySession.player
+                Log.w(LOG_TAG, "suppressionReason=$reason playWhenReady=${p.playWhenReady}")
+                FirebaseUtils.safeSetCustomKey("playback_suppression_reason", reason)
+
+                handler.removeCallbacks(focusRecovery)
+                if (reason == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS) {
+                    // Arm the watchdog: if focus is never returned, focusRecovery re-requests it.
+                    handler.postDelayed(focusRecovery, FOCUS_RECOVERY_DELAY_MS)
+                }
+            }
+
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 val p = mediaLibrarySession.player
                 val failedId = p.currentMediaItem?.mediaId
@@ -286,8 +308,15 @@ class DashTuneMusicService : MediaLibraryService() {
             }
         }
 
+        // Explicit media usage (not AudioAttributes.DEFAULT, whose usage is UNKNOWN) so AAOS's
+        // strict audio-focus policy grants/returns focus reliably.
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .build()
+
         val player = ExoPlayer.Builder(this)
-            .setAudioAttributes(AudioAttributes.DEFAULT, true)
+            .setAudioAttributes(audioAttributes, true)
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
         player.addListener(playerListener)
@@ -315,6 +344,22 @@ class DashTuneMusicService : MediaLibraryService() {
             if (shouldScheduleReporter(p.isPlaying, isPlayingAudiobook)) {
                 reportAudiobookProgress()
                 handler.postDelayed(audiobookPositionReporter, AUDIOBOOK_POSITION_REPORT_INTERVAL_MS)
+            }
+        }
+
+        focusRecovery = Runnable {
+            val p = mediaLibrarySession.player
+            // Only act if we're still meant to be playing but remain stuck in transient focus
+            // loss. Toggling playWhenReady forces ExoPlayer's AudioFocusManager to abandon and
+            // re-request focus. If another app legitimately holds focus, the re-request is denied
+            // and we stay suppressed (no double audio); if the state was stale, playback resumes.
+            if (p.playWhenReady &&
+                p.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS
+            ) {
+                Log.w(LOG_TAG, "Audio focus stuck in transient loss; re-requesting focus")
+                FirebaseUtils.safeLog("Audio focus recovery: re-requesting focus")
+                p.playWhenReady = false
+                p.playWhenReady = true
             }
         }
 
@@ -419,6 +464,7 @@ class DashTuneMusicService : MediaLibraryService() {
         mediaLibrarySession.player.release()
         handler.removeCallbacks(playbackPoll)
         handler.removeCallbacks(audiobookPositionReporter)
+        handler.removeCallbacks(focusRecovery)
 
         try {
             downloadManager.removeListener(downloadListener)
