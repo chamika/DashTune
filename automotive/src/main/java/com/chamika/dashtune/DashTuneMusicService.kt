@@ -309,8 +309,7 @@ class DashTuneMusicService : MediaLibraryService() {
         }
 
         // Explicit media usage (not AudioAttributes.DEFAULT, whose usage is UNKNOWN) so AAOS's
-        // strict audio-focus policy grants/returns focus reliably. WAKE_MODE_NETWORK keeps the
-        // CPU/WiFi alive so streaming doesn't stall when the system dozes.
+        // strict audio-focus policy grants/returns focus reliably.
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -318,7 +317,6 @@ class DashTuneMusicService : MediaLibraryService() {
 
         val player = ExoPlayer.Builder(this)
             .setAudioAttributes(audioAttributes, true)
-            .setWakeMode(C.WAKE_MODE_NETWORK)
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
         player.addListener(playerListener)
