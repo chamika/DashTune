@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "832350878937",
+    "project_id": "dashtune-4fc67",
+    "storage_bucket": "dashtune-4fc67.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:832350878937:android:133b2d78b3509e2dfc12c8",
+        "android_client_info": {
+          "package_name": "com.chamika.dashtune"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDDhKYpfNrqaHFXJp2VxSngZSRDCplI4RM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
