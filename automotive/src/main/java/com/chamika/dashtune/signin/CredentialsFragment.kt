@@ -52,17 +52,21 @@ class CredentialsFragment : Fragment() {
 
         viewModel.startQuickConnect(server)
 
-        viewModel.quickConnectCode.observe(viewLifecycleOwner, object : Observer<Int> {
-            override fun onChanged(value: Int) {
+        viewModel.quickConnectCode.observe(viewLifecycleOwner, object : Observer<String?> {
+            override fun onChanged(value: String?) {
                 quickConnectProgressBar.visibility = View.GONE
                 quickConnectCode.visibility = View.VISIBLE
 
-                if (value == -1) {
+                if (value.isNullOrEmpty()) {
                     quickConnectCode.text = context?.getText(R.string.unavailable)
                 } else {
-                    val code = value.toString()
-                    val formattedCode = code.substring(0, 3) + " " + code.substring(3)
-                    quickConnectCode.text = formattedCode
+                    // Insert a space at the midpoint for readability without assuming a length.
+                    val mid = value.length / 2
+                    quickConnectCode.text = if (mid > 0) {
+                        value.substring(0, mid) + " " + value.substring(mid)
+                    } else {
+                        value
+                    }
                 }
             }
         })

@@ -15,6 +15,7 @@ import okio.sink
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -26,7 +27,7 @@ class AlbumArtContentProvider : ContentProvider() {
         .build()
 
     companion object {
-        private val uriMap = mutableMapOf<Uri, Uri>()
+        private val uriMap = ConcurrentHashMap<Uri, Uri>()
         private val inProgress = HashMap<Uri, CountDownLatch>()
 
         fun mapUri(uri: Uri): Uri {
@@ -63,8 +64,15 @@ class AlbumArtContentProvider : ContentProvider() {
         val path = uri.path?.removePrefix("/") ?: throw FileNotFoundException("null path")
         val file = File(context.cacheDir, path)
 
+        // Defense in depth: ensure the resolved file stays within cacheDir even if a crafted
+        // path slips past the uriMap gate.
+        val cacheRoot = context.cacheDir.canonicalFile
+        if (!file.canonicalFile.toPath().startsWith(cacheRoot.toPath())) {
+            throw FileNotFoundException("Invalid path: ${uri.path}")
+        }
+
         if (file.exists()) {
-            Log.d(LOG_TAG, "Returning existing file for $remoteUri: $file")
+            Log.d(LOG_TAG, "Returning existing album art file: ${file.name}")
             return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
 
@@ -78,9 +86,12 @@ class AlbumArtContentProvider : ContentProvider() {
         }
 
         if (existingLatch != null) {
-            Log.d(LOG_TAG, "Waiting for image download in separate thread... $remoteUri")
+            Log.d(LOG_TAG, "Waiting for image download in separate thread... ${remoteUri.path}")
             existingLatch.await(15, TimeUnit.SECONDS)
             Log.d(LOG_TAG, "... Available!")
+            if (!file.exists()) {
+                throw FileNotFoundException(uri.path)
+            }
             return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
 
@@ -89,11 +100,12 @@ class AlbumArtContentProvider : ContentProvider() {
             .url(remoteUri.toString())
             .build()
 
-        Log.d(LOG_TAG, "Downloading $remoteUri ...")
+        // Note: remoteUri may carry an api_key query parameter; only log the path, never the query.
+        Log.d(LOG_TAG, "Downloading ${remoteUri.path} ...")
         try {
             client.newCall(request).execute().use {
                 if (it.code == 200) {
-                    Log.d(LOG_TAG, "Downloaded $remoteUri")
+                    Log.d(LOG_TAG, "Downloaded ${remoteUri.path}")
                     val source = it.body.source()
                     source.request(Long.MAX_VALUE)
 
@@ -104,13 +116,13 @@ class AlbumArtContentProvider : ContentProvider() {
 
                     tmpFile.renameTo(file)
                 } else {
-                    Log.w(LOG_TAG, "Failed to download $remoteUri: \n ${it.code} - ${it.body}")
+                    Log.w(LOG_TAG, "Failed to download ${remoteUri.path}: HTTP ${it.code}")
                     FirebaseUtils.safeSetCustomKey("album_art_path", remoteUri.path ?: "unknown")
                     FirebaseUtils.safeRecordException(Exception("Album art download failed: HTTP ${it.code}"))
                 }
             }
         } catch (e: IOException) {
-            Log.w(LOG_TAG, "Network error downloading $remoteUri", e)
+            Log.w(LOG_TAG, "Network error downloading ${remoteUri.path}", e)
         } finally {
             tmpFile.delete()
             synchronized(inProgress) {

@@ -55,12 +55,14 @@ class Authenticator(val context: Context) : AbstractAccountAuthenticator(context
         }
 
         val accountManager = AccountManager.get(context)
-        val password = accountManager.getPassword(account)
-        if (password != null) {
+        // The access token is stored via setAuthToken under JellyfinAccountManager.TOKEN_TYPE
+        // (not as the account password, which is intentionally empty). Return the cached token.
+        val token = accountManager.peekAuthToken(account, JellyfinAccountManager.TOKEN_TYPE)
+        if (!token.isNullOrEmpty()) {
             val res = Bundle()
             res.putString(AccountManager.KEY_ACCOUNT_NAME, account.name)
             res.putString(AccountManager.KEY_ACCOUNT_TYPE, ACCOUNT_TYPE)
-            res.putString(AccountManager.KEY_AUTHTOKEN, password)
+            res.putString(AccountManager.KEY_AUTHTOKEN, token)
             return res
         }
 
