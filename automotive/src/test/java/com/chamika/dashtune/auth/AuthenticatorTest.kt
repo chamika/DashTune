@@ -87,9 +87,11 @@ class AuthenticatorTest {
     }
 
     @Test
-    fun `getAuthToken returns token bundle when password exists`() {
+    fun `getAuthToken returns token bundle when token exists`() {
         val account = Account("testuser", Authenticator.ACCOUNT_TYPE)
-        every { accountManager.getPassword(account) } returns "stored-token"
+        every {
+            accountManager.peekAuthToken(account, JellyfinAccountManager.TOKEN_TYPE)
+        } returns "stored-token"
 
         val result = authenticator.getAuthToken(null, account, Authenticator.AUTHTOKEN_TYPE, null)
 
@@ -99,9 +101,23 @@ class AuthenticatorTest {
     }
 
     @Test
-    fun `getAuthToken returns intent bundle when no password stored`() {
+    fun `getAuthToken returns intent bundle when no token stored`() {
         val account = Account("testuser", Authenticator.ACCOUNT_TYPE)
-        every { accountManager.getPassword(account) } returns null
+        every {
+            accountManager.peekAuthToken(account, JellyfinAccountManager.TOKEN_TYPE)
+        } returns null
+
+        val result = authenticator.getAuthToken(null, account, Authenticator.AUTHTOKEN_TYPE, null)
+
+        assertNotNull(result.getParcelable(AccountManager.KEY_INTENT, android.content.Intent::class.java))
+    }
+
+    @Test
+    fun `getAuthToken returns intent bundle when token is empty`() {
+        val account = Account("testuser", Authenticator.ACCOUNT_TYPE)
+        every {
+            accountManager.peekAuthToken(account, JellyfinAccountManager.TOKEN_TYPE)
+        } returns ""
 
         val result = authenticator.getAuthToken(null, account, Authenticator.AUTHTOKEN_TYPE, null)
 
@@ -111,7 +127,9 @@ class AuthenticatorTest {
     @Test
     fun `getAuthToken with valid token does not include error message`() {
         val account = Account("user", Authenticator.ACCOUNT_TYPE)
-        every { accountManager.getPassword(account) } returns "valid-token"
+        every {
+            accountManager.peekAuthToken(account, JellyfinAccountManager.TOKEN_TYPE)
+        } returns "valid-token"
 
         val result = authenticator.getAuthToken(null, account, Authenticator.AUTHTOKEN_TYPE, null)
 

@@ -37,8 +37,10 @@ class SignInViewModel @Inject constructor() : ViewModel() {
     private val _loggedIn = MutableLiveData<Boolean>()
     val loggedIn: LiveData<Boolean> = _loggedIn
 
-    private val _quickConnectCode = MutableLiveData<Int>()
-    val quickConnectCode: LiveData<Int> = _quickConnectCode
+    // Held as a String: QuickConnect codes can contain leading zeros, which an Int would drop.
+    // null signals QuickConnect is unavailable.
+    private val _quickConnectCode = MutableLiveData<String?>()
+    val quickConnectCode: LiveData<String?> = _quickConnectCode
 
     suspend fun pingServer(serverUrl: String): Boolean {
         return try {
@@ -61,28 +63,34 @@ class SignInViewModel @Inject constructor() : ViewModel() {
         val api = jellyfin.createApi(serverUrl)
 
         viewModelScope.launch {
-            val isEnabled = withContext(Dispatchers.IO) {
-                api.quickConnectApi.getQuickConnectEnabled()
-            }
+            try {
+                val isEnabled = withContext(Dispatchers.IO) {
+                    api.quickConnectApi.getQuickConnectEnabled()
+                }
 
-            if (isEnabled.status != 200 || !isEnabled.content) {
-                _quickConnectCode.value = -1
-                return@launch
-            }
+                if (isEnabled.status != 200 || !isEnabled.content) {
+                    _quickConnectCode.value = null
+                    return@launch
+                }
 
-            val response = withContext(Dispatchers.IO) {
-                api.quickConnectApi.initiateQuickConnect()
-            }
+                val response = withContext(Dispatchers.IO) {
+                    api.quickConnectApi.initiateQuickConnect()
+                }
 
-            if (response.status == 200) {
-                quickConnectSecret = response.content.secret
-                Log.d(LOG_TAG, "QuickConnect initiated")
-                _quickConnectCode.value = Integer.valueOf(response.content.code)
+                if (response.status == 200) {
+                    quickConnectSecret = response.content.secret
+                    Log.d(LOG_TAG, "QuickConnect initiated")
+                    _quickConnectCode.value = response.content.code
 
-                do {
-                    delay(1.seconds)
-                    checkQuickConnect(serverUrl)
-                } while (isActive)
+                    do {
+                        delay(1.seconds)
+                        checkQuickConnect(serverUrl)
+                    } while (isActive)
+                }
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "QuickConnect failed", e)
+                FirebaseUtils.safeRecordException(e)
+                _quickConnectCode.value = null
             }
         }
     }
@@ -105,13 +113,15 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             }
 
             if (loginResponse.status == 200) {
+                val userName = loginResponse.content.user?.name
+                val accessToken = loginResponse.content.accessToken
+                if (userName == null || accessToken == null) {
+                    Log.w(LOG_TAG, "QuickConnect auth succeeded but response was missing user/token")
+                    return
+                }
                 FirebaseUtils.safeSetCustomKey("auth_method", "quick_connect")
                 FirebaseUtils.safeLog("Login successful via quick_connect")
-                loginSuccess(
-                    server,
-                    loginResponse.content.user?.name!!,
-                    loginResponse.content.accessToken!!
-                )
+                loginSuccess(server, userName, accessToken)
             }
         }
     }
@@ -122,13 +132,15 @@ class SignInViewModel @Inject constructor() : ViewModel() {
                 jellyfin.createApi(server).userApi.authenticateUserByName(username, password)
             }
 
-            if (response.status == 200) {
+            val accessToken = response.content.accessToken
+            if (response.status == 200 && accessToken != null) {
                 FirebaseUtils.safeSetCustomKey("auth_method", "password")
                 FirebaseUtils.safeLog("Login successful via password")
-                loginSuccess(server, username, response.content.accessToken!!)
+                loginSuccess(server, username, accessToken)
+                true
+            } else {
+                false
             }
-
-            response.status == 200
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error", e)
             FirebaseUtils.safeSetCustomKey("auth_method", "password")

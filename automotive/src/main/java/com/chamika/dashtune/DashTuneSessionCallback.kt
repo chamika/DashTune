@@ -89,16 +89,22 @@ class DashTuneSessionCallback(
 
         val connectionResult = super.onConnect(session, controller)
 
-        val sessionCommands = connectionResult.availableSessionCommands
+        val commandsBuilder = connectionResult.availableSessionCommands
             .buildUpon()
-            .add(SessionCommand(LOGIN_COMMAND, Bundle()))
             .add(SessionCommand(REPEAT_COMMAND, Bundle()))
             .add(SessionCommand(SHUFFLE_COMMAND, Bundle()))
-            .add(SessionCommand(SYNC_COMMAND, Bundle()))
-            .build()
+
+        // LOGIN and SYNC mutate account state / trigger network work and must only be issued by
+        // our own UI (SignInActivity, SettingsFragment). The media session is exported, so any
+        // installed app can connect; restrict these privileged commands to our own package.
+        if (controller.packageName == service.packageName) {
+            commandsBuilder
+                .add(SessionCommand(LOGIN_COMMAND, Bundle()))
+                .add(SessionCommand(SYNC_COMMAND, Bundle()))
+        }
 
         return ConnectionResult.accept(
-            sessionCommands,
+            commandsBuilder.build(),
             connectionResult.availablePlayerCommands
         )
     }
@@ -327,7 +333,7 @@ class DashTuneSessionCallback(
 
                 val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
                     resolvedItems,
-                    resolvedItems.indexOfFirst { it.mediaId == singleItem.mediaId },
+                    resolvedItems.indexOfFirst { it.mediaId == singleItem.mediaId }.coerceAtLeast(0),
                     startPositionMs
                 )
                 savePlaylist(resolvedItems)

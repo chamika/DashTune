@@ -724,9 +724,11 @@ class DashTuneMusicService : MediaLibraryService() {
             val format = exoPlayer.audioFormat
             val formatString = "${format?.containerMimeType} at ${format?.averageBitrate} bps"
 
+            // Do not log the full stream URL: it carries the Jellyfin access token as an
+            // api_key query parameter. Log the track id instead.
             Log.i(
                 LOG_TAG,
-                "Playing $formatString: ${exoPlayer.currentMediaItem?.localConfiguration?.uri}"
+                "Playing $formatString: ${exoPlayer.currentMediaItem?.mediaId}"
             )
             jellyfinApi.playStateApi.reportPlaybackStart(
                 PlaybackStartInfo(
