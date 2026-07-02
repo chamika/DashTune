@@ -361,7 +361,7 @@ class MediaItemFactory(
             .getDefaultSharedPreferences(context)
             .getString("bitrate", "Direct stream")!!
 
-        val bitrate = if (preferenceBitrate == "Direct stream") null else preferenceBitrate.toInt()
+        val bitrate = if (preferenceBitrate == "Direct stream") null else preferenceBitrate.toIntOrNull()
 
         val allowedContainers = listOf("flac", "mp3", "m4a", "aac", "ogg")
         return jellyfinApi.universalAudioApi.getUniversalAudioStreamUrl(

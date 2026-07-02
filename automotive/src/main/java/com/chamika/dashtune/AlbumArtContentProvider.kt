@@ -26,7 +26,9 @@ class AlbumArtContentProvider : ContentProvider() {
         .build()
 
     companion object {
-        private val uriMap = mutableMapOf<Uri, Uri>()
+        // Written from the media session/browse threads and read from binder threads,
+        // so it must be a concurrent map.
+        private val uriMap = java.util.concurrent.ConcurrentHashMap<Uri, Uri>()
         private val inProgress = HashMap<Uri, CountDownLatch>()
 
         fun mapUri(uri: Uri): Uri {
