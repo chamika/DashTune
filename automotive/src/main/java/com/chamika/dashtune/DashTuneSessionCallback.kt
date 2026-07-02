@@ -327,7 +327,9 @@ class DashTuneSessionCallback(
 
                 val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
                     resolvedItems,
-                    resolvedItems.indexOfFirst { it.mediaId == singleItem.mediaId },
+                    // indexOfFirst returns -1 when the selected item isn't among the resolved
+                    // children (e.g. stale cache); fall back to the first item.
+                    resolvedItems.indexOfFirst { it.mediaId == singleItem.mediaId }.coerceAtLeast(0),
                     startPositionMs
                 )
                 savePlaylist(resolvedItems)
@@ -546,7 +548,12 @@ class DashTuneSessionCallback(
         mediaId: String,
         rating: Rating
     ): ListenableFuture<SessionResult> {
-        Log.i(LOG_TAG, "onSetRating ${(rating as HeartRating).isHeart}")
+        // Controllers can send any Rating subtype; we only support HeartRating (favourites).
+        if (rating !is HeartRating) {
+            Log.w(LOG_TAG, "onSetRating: unsupported rating type ${rating.javaClass.simpleName}")
+            return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
+        }
+        Log.i(LOG_TAG, "onSetRating ${rating.isHeart}")
 
         val item = session.player.currentMediaItem
         item?.let {

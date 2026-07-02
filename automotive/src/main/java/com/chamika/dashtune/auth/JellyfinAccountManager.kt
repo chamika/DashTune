@@ -26,8 +26,9 @@ class JellyfinAccountManager(private val accountManager: AccountManager) {
 
     fun storeAccount(server: String, username: String, token: String): Account {
         var account = accountManager.getAccountsByType(ACCOUNT_TYPE).firstOrNull {
-            accountManager.getUserData(it, USERDATA_SERVER_KEY).equals(server) &&
-                    it.name.equals(username)
+            // getUserData can return null; calling .equals() on it directly would NPE
+            accountManager.getUserData(it, USERDATA_SERVER_KEY) == server &&
+                    it.name == username
         }
 
         if (account == null) {

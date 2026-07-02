@@ -47,6 +47,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
@@ -198,7 +199,7 @@ class DashTuneMusicService : MediaLibraryService() {
         // Setup offline cache
         val cacheSizeStr = PreferenceManager.getDefaultSharedPreferences(this)
             .getString("cache_size", "200") ?: "200"
-        val cacheSizeMb = cacheSizeStr.toLong()
+        val cacheSizeMb = cacheSizeStr.toLongOrNull() ?: 200L
         val cacheEvictor = createCacheEvictor(cacheSizeMb)
 
         val cacheDir = File(cacheDir, "exoplayer_cache")
@@ -541,6 +542,7 @@ class DashTuneMusicService : MediaLibraryService() {
         networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
         PreferenceManager.getDefaultSharedPreferences(this)
             .unregisterOnSharedPreferenceChangeListener(prefsListener)
+        serviceScope.cancel()
 
         super.onDestroy()
     }
@@ -656,7 +658,7 @@ class DashTuneMusicService : MediaLibraryService() {
                 ).content.items
 
                 val preferenceBitrate = prefs.getString("bitrate", "Direct stream")!!
-                val bitrate = if (preferenceBitrate == "Direct stream") null else preferenceBitrate.toInt()
+                val bitrate = if (preferenceBitrate == "Direct stream") null else preferenceBitrate.toIntOrNull()
                 val allowedContainers = listOf("flac", "mp3", "m4a", "aac", "ogg")
 
                 var queued = 0

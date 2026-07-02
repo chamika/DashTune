@@ -37,8 +37,11 @@ class SignInViewModel @Inject constructor() : ViewModel() {
     private val _loggedIn = MutableLiveData<Boolean>()
     val loggedIn: LiveData<Boolean> = _loggedIn
 
-    private val _quickConnectCode = MutableLiveData<Int>()
-    val quickConnectCode: LiveData<Int> = _quickConnectCode
+    /** The QuickConnect code to display, or null when QuickConnect is unavailable. */
+    private val _quickConnectCode = MutableLiveData<String?>()
+    val quickConnectCode: LiveData<String?> = _quickConnectCode
+
+    private var quickConnectJob: kotlinx.coroutines.Job? = null
 
     suspend fun pingServer(serverUrl: String): Boolean {
         return try {
@@ -57,37 +60,53 @@ class SignInViewModel @Inject constructor() : ViewModel() {
     }
 
     fun startQuickConnect(serverUrl: String) {
+        if (quickConnectJob?.isActive == true) return
         Log.i(LOG_TAG, "Initiate QuickConnect")
         val api = jellyfin.createApi(serverUrl)
 
-        viewModelScope.launch {
-            val isEnabled = withContext(Dispatchers.IO) {
-                api.quickConnectApi.getQuickConnectEnabled()
-            }
+        quickConnectJob = viewModelScope.launch {
+            try {
+                val isEnabled = withContext(Dispatchers.IO) {
+                    api.quickConnectApi.getQuickConnectEnabled()
+                }
 
-            if (isEnabled.status != 200 || !isEnabled.content) {
-                _quickConnectCode.value = -1
-                return@launch
-            }
+                if (isEnabled.status != 200 || !isEnabled.content) {
+                    _quickConnectCode.value = null
+                    return@launch
+                }
 
-            val response = withContext(Dispatchers.IO) {
-                api.quickConnectApi.initiateQuickConnect()
-            }
+                val response = withContext(Dispatchers.IO) {
+                    api.quickConnectApi.initiateQuickConnect()
+                }
 
-            if (response.status == 200) {
+                if (response.status != 200) {
+                    _quickConnectCode.value = null
+                    return@launch
+                }
+
                 quickConnectSecret = response.content.secret
                 Log.d(LOG_TAG, "QuickConnect initiated")
-                _quickConnectCode.value = Integer.valueOf(response.content.code)
+                // Keep the code as a string: converting to Int drops leading zeros,
+                // showing the user a code the server will never accept.
+                _quickConnectCode.value = response.content.code
 
                 do {
                     delay(1.seconds)
-                    checkQuickConnect(serverUrl)
-                } while (isActive)
+                    val authenticated = checkQuickConnect(serverUrl)
+                } while (isActive && !authenticated)
+            } catch (e: Exception) {
+                // Network failure or an expired QuickConnect secret (the server returns an
+                // error status once it lapses); surface "unavailable" instead of crashing.
+                Log.w(LOG_TAG, "QuickConnect failed", e)
+                FirebaseUtils.safeSetCustomKey("auth_method", "quick_connect")
+                FirebaseUtils.safeRecordException(e)
+                _quickConnectCode.value = null
             }
         }
     }
 
-    private suspend fun checkQuickConnect(server: String) {
+    /** Returns true once QuickConnect has been approved and login completed. */
+    private suspend fun checkQuickConnect(server: String): Boolean {
         val api = jellyfin.createApi(server)
         val response = withContext(Dispatchers.IO) {
             api.quickConnectApi.getQuickConnectState(quickConnectSecret)
@@ -95,25 +114,25 @@ class SignInViewModel @Inject constructor() : ViewModel() {
 
         Log.d(LOG_TAG, "Checking QuickConnect")
 
-        if (response.status == 200) {
-            if (!response.content.authenticated) {
-                return
-            }
-
-            val loginResponse = withContext(Dispatchers.IO) {
-                api.userApi.authenticateWithQuickConnect(QuickConnectDto(response.content.secret))
-            }
-
-            if (loginResponse.status == 200) {
-                FirebaseUtils.safeSetCustomKey("auth_method", "quick_connect")
-                FirebaseUtils.safeLog("Login successful via quick_connect")
-                loginSuccess(
-                    server,
-                    loginResponse.content.user?.name!!,
-                    loginResponse.content.accessToken!!
-                )
-            }
+        if (response.status != 200 || !response.content.authenticated) {
+            return false
         }
+
+        val loginResponse = withContext(Dispatchers.IO) {
+            api.userApi.authenticateWithQuickConnect(QuickConnectDto(response.content.secret))
+        }
+
+        if (loginResponse.status == 200) {
+            FirebaseUtils.safeSetCustomKey("auth_method", "quick_connect")
+            FirebaseUtils.safeLog("Login successful via quick_connect")
+            loginSuccess(
+                server,
+                loginResponse.content.user?.name!!,
+                loginResponse.content.accessToken!!
+            )
+            return true
+        }
+        return false
     }
 
     suspend fun login(server: String, username: String, password: String): Boolean {

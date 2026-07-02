@@ -52,17 +52,15 @@ class CredentialsFragment : Fragment() {
 
         viewModel.startQuickConnect(server)
 
-        viewModel.quickConnectCode.observe(viewLifecycleOwner, object : Observer<Int> {
-            override fun onChanged(value: Int) {
+        viewModel.quickConnectCode.observe(viewLifecycleOwner, object : Observer<String?> {
+            override fun onChanged(value: String?) {
                 quickConnectProgressBar.visibility = View.GONE
                 quickConnectCode.visibility = View.VISIBLE
 
-                if (value == -1) {
+                if (value == null) {
                     quickConnectCode.text = context?.getText(R.string.unavailable)
                 } else {
-                    val code = value.toString()
-                    val formattedCode = code.substring(0, 3) + " " + code.substring(3)
-                    quickConnectCode.text = formattedCode
+                    quickConnectCode.text = formatQuickConnectCode(value)
                 }
             }
         })
@@ -85,9 +83,9 @@ class CredentialsFragment : Fragment() {
                         errorText.visibility = View.VISIBLE
                     }
 
-                    val inputManager =
-                        activity?.getSystemService(AppCompatActivity.INPUT_METHOD_SERVICE) as InputMethodManager
-                    inputManager.hideSoftInputFromWindow(
+                    val inputManager = activity
+                        ?.getSystemService(AppCompatActivity.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    inputManager?.hideSoftInputFromWindow(
                         activity?.currentFocus?.windowToken,
                         InputMethodManager.HIDE_NOT_ALWAYS
                     )
@@ -96,4 +94,12 @@ class CredentialsFragment : Fragment() {
         }
     }
 
+    companion object {
+        /** Inserts a space halfway through the code for readability, e.g. "012345" -> "012 345". */
+        internal fun formatQuickConnectCode(code: String): String {
+            if (code.length < 4) return code
+            val mid = code.length / 2
+            return code.substring(0, mid) + " " + code.substring(mid)
+        }
+    }
 }
