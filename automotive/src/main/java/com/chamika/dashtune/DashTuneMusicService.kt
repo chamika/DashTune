@@ -86,6 +86,30 @@ class DashTuneMusicService : MediaLibraryService() {
          */
         internal const val FOCUS_RECOVERY_DELAY_MS = 8_000L
 
+        /**
+         * Delay between retries of the current item after a transient network playback error.
+         * Failures with no connectivity return quickly, so this mostly paces how often we poke
+         * the player while waiting for the car's data connection to come up.
+         */
+        internal const val NETWORK_ERROR_RETRY_DELAY_MS = 5_000L
+
+        /**
+         * Max consecutive network-error retries before falling back to skipping the item.
+         * 24 × 5s ≈ 2 minutes, which covers the head unit bringing up connectivity after a
+         * cold boot; beyond that the server is likely genuinely unreachable.
+         */
+        internal const val MAX_NETWORK_ERROR_RETRIES = 24
+
+        /**
+         * Returns true when [errorCode] (a [PlaybackException.ErrorCode]
+         * [androidx.media3.common.PlaybackException]) indicates a transient network failure
+         * worth retrying in place. Skip-chaining on these would walk through and then clear the
+         * whole queue during a cold boot, before the car has connectivity.
+         */
+        internal fun isTransientNetworkError(errorCode: Int): Boolean =
+            errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                    errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+
         /** Converts a playback position in milliseconds to Jellyfin's 100-ns tick units. */
         internal fun msToTicks(positionMs: Long): Long = positionMs * MILLISECONDS_TO_TICKS
 
@@ -138,6 +162,8 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var audiobookPositionReporter: Runnable
     private lateinit var playerListener: Player.Listener
     private lateinit var focusRecovery: Runnable
+    private lateinit var networkErrorRetry: Runnable
+    private var networkErrorRetries = 0
 
     private lateinit var connectivityManager: ConnectivityManager
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -242,6 +268,21 @@ class DashTuneMusicService : MediaLibraryService() {
                 FirebaseUtils.safeSetCustomKey("failed_track_id", failedId ?: "")
                 FirebaseUtils.safeRecordException(error)
 
+                if (isTransientNetworkError(error.errorCode) &&
+                    networkErrorRetries < MAX_NETWORK_ERROR_RETRIES
+                ) {
+                    networkErrorRetries++
+                    Log.w(
+                        LOG_TAG,
+                        "Network error; retrying current item " +
+                                "($networkErrorRetries/$MAX_NETWORK_ERROR_RETRIES)"
+                    )
+                    handler.removeCallbacks(networkErrorRetry)
+                    handler.postDelayed(networkErrorRetry, NETWORK_ERROR_RETRY_DELAY_MS)
+                    return
+                }
+                networkErrorRetries = 0
+
                 if (p.hasNextMediaItem()) {
                     p.seekToNextMediaItem()
                     p.prepare()
@@ -280,6 +321,7 @@ class DashTuneMusicService : MediaLibraryService() {
                 if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
                     FirebaseUtils.safeSetCustomKey("is_playing", player.isPlaying)
                     if (player.isPlaying) {
+                        networkErrorRetries = 0
                         startPlaybackPoll()
                         if (isPlayingAudiobook && player.currentMediaItem != null) {
                             reportAudiobookStart(player)
@@ -363,6 +405,16 @@ class DashTuneMusicService : MediaLibraryService() {
             }
         }
 
+        networkErrorRetry = Runnable {
+            val p = mediaLibrarySession.player
+            // prepare() clears the error and resumes at the failed item/position; playWhenReady
+            // is retained, so playback continues automatically once the source is reachable.
+            if (p.playbackState == Player.STATE_IDLE && p.playerError != null) {
+                Log.i(LOG_TAG, "Retrying playback after network error (attempt $networkErrorRetries)")
+                p.prepare()
+            }
+        }
+
         callback = DashTuneSessionCallback(this, accountManager, jellyfinApi, mediaCacheDao)
 
         mediaLibrarySession = MediaLibrarySession.Builder(this, player, callback)
@@ -385,6 +437,12 @@ class DashTuneMusicService : MediaLibraryService() {
             override fun onAvailable(network: Network) {
                 Log.i(LOG_TAG, "Network available")
                 FirebaseUtils.safeLog("Network available")
+
+                // A pending network-error retry can fire right away now that connectivity is
+                // back; the runnable no-ops unless the player is idle with an error.
+                handler.removeCallbacks(networkErrorRetry)
+                handler.post(networkErrorRetry)
+
                 if (!accountManager.isAuthenticated) return
 
                 val prefs = PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService)
@@ -465,6 +523,7 @@ class DashTuneMusicService : MediaLibraryService() {
         handler.removeCallbacks(playbackPoll)
         handler.removeCallbacks(audiobookPositionReporter)
         handler.removeCallbacks(focusRecovery)
+        handler.removeCallbacks(networkErrorRetry)
 
         try {
             downloadManager.removeListener(downloadListener)

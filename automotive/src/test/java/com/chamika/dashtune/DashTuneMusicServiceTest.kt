@@ -3,6 +3,7 @@ package com.chamika.dashtune
 import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
@@ -139,6 +140,64 @@ class DashTuneMusicServiceTest {
     @Test
     fun `shouldScheduleReporter returns false when neither playing nor audiobook`() {
         assertFalse(DashTuneMusicService.shouldScheduleReporter(isPlaying = false, isPlayingAudiobook = false))
+    }
+
+    // --- isTransientNetworkError tests ---
+
+    @Test
+    fun `isTransientNetworkError returns true for network connection failed`() {
+        assertTrue(
+            DashTuneMusicService.isTransientNetworkError(
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+            )
+        )
+    }
+
+    @Test
+    fun `isTransientNetworkError returns true for network connection timeout`() {
+        assertTrue(
+            DashTuneMusicService.isTransientNetworkError(
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+            )
+        )
+    }
+
+    @Test
+    fun `isTransientNetworkError returns false for bad HTTP status`() {
+        // A reachable server returning an error status is not a connectivity problem;
+        // skipping to the next item is the right recovery.
+        assertFalse(
+            DashTuneMusicService.isTransientNetworkError(
+                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+            )
+        )
+    }
+
+    @Test
+    fun `isTransientNetworkError returns false for decoding failure`() {
+        assertFalse(
+            DashTuneMusicService.isTransientNetworkError(
+                PlaybackException.ERROR_CODE_DECODING_FAILED
+            )
+        )
+    }
+
+    @Test
+    fun `isTransientNetworkError returns false for file not found`() {
+        assertFalse(
+            DashTuneMusicService.isTransientNetworkError(
+                PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+            )
+        )
+    }
+
+    @Test
+    fun `network error retry window covers a cold boot`() {
+        // Retries must span at least ~2 minutes so the head unit has time to bring up
+        // its data connection after a cold start.
+        val totalWindowMs =
+            DashTuneMusicService.MAX_NETWORK_ERROR_RETRIES * DashTuneMusicService.NETWORK_ERROR_RETRY_DELAY_MS
+        assertTrue(totalWindowMs >= 120_000L)
     }
 
     // --- isAudiobookTrack tests ---
