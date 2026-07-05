@@ -17,7 +17,9 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.google.common.cache.Cache
 import com.google.common.cache.CacheBuilder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.artistsApi
 import org.jellyfin.sdk.api.client.extensions.itemsApi
@@ -34,6 +36,7 @@ import java.net.ConnectException
 import java.util.concurrent.TimeoutException
 
 private const val MAX_ITEMS = 120
+private const val REQUEST_HARD_TIMEOUT_MS = 10_000L
 
 class JellyfinMediaTree(
     private val context: Context,
@@ -66,14 +69,20 @@ class JellyfinMediaTree(
         return canonicalOrder.filter { it.first in finalSelected }.map { it.second }
     }
 
-    private suspend fun <T> retryOnFailure(
+    private suspend fun <T : Any> retryOnFailure(
         maxRetries: Int = 2,
         block: suspend () -> T
     ): T {
         var lastException: Exception? = null
         repeat(maxRetries + 1) { attempt ->
             try {
-                return block()
+                // Hard cap per attempt so no tree network call can suspend forever
+                // even if a caller has no timeout guard of its own (issue #31).
+                return withTimeoutOrNull(REQUEST_HARD_TIMEOUT_MS) { block() }
+                    ?: throw TimeoutException("Request timed out after ${REQUEST_HARD_TIMEOUT_MS}ms")
+            } catch (e: CancellationException) {
+                // A caller's outer timeout cancelled us — propagate, never retry.
+                throw e
             } catch (e: Exception) {
                 if (e is TimeoutException || e is ConnectException ||
                     e.cause is TimeoutException || e.cause is ConnectException
