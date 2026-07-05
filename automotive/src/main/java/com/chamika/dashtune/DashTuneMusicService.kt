@@ -51,6 +51,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.HttpClientOptions
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.playStateApi
 import org.jellyfin.sdk.api.client.extensions.universalAudioApi
@@ -63,6 +64,7 @@ import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.RepeatMode
 import org.jellyfin.sdk.model.api.UpdateUserItemDataDto
 import org.jellyfin.sdk.model.serializer.toUUID
+import kotlin.time.Duration.Companion.seconds
 import java.io.File
 import java.util.concurrent.Executors
 import javax.inject.Inject
@@ -194,7 +196,15 @@ class DashTuneMusicService : MediaLibraryService() {
         accountManager = com.chamika.dashtune.auth.JellyfinAccountManager(
             AccountManager.get(applicationContext)
         )
-        jellyfinApi = jellyfin.createApi()
+        // Explicit HTTP timeouts so no single Jellyfin API call can outlive the
+        // session callback timeout guards (issue #31).
+        jellyfinApi = jellyfin.createApi(
+            httpClientOptions = HttpClientOptions(
+                connectTimeout = 5.seconds,
+                requestTimeout = 7.seconds,
+                socketTimeout = 7.seconds,
+            )
+        )
 
         // Setup offline cache
         val cacheSizeStr = PreferenceManager.getDefaultSharedPreferences(this)

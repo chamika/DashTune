@@ -47,6 +47,7 @@ import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.serializer.toUUID
+import java.util.concurrent.TimeoutException
 
 @OptIn(UnstableApi::class)
 class DashTuneSessionCallback(
@@ -67,6 +68,12 @@ class DashTuneSessionCallback(
         const val PLAYLIST_TRACK_POSITON_MS_PREF = "playlistTrackPositionMs"
 
         private const val BROWSE_TIMEOUT_MS = 8_000L
+
+        // Bound for queue-mutating callbacks (onAddMediaItems/onSetMediaItems/
+        // onPlaybackResumption). Media3 serializes controller commands behind each
+        // callback's future — a future that never completes wedges the controller's
+        // command queue permanently (issue #31), so every future must complete.
+        private const val COMMAND_TIMEOUT_MS = 10_000L
     }
 
     private lateinit var repository: MediaRepository
@@ -259,10 +266,10 @@ class DashTuneSessionCallback(
         ensureTreeInitialized()
         return SuspendToFutureAdapter.launchFuture {
             try {
-                LibraryResult.ofItem(
-                    repository.getItem(mediaId),
-                    null
-                )
+                val item = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
+                    repository.getItem(mediaId)
+                } ?: throw TimeoutException("getItem timed out after ${BROWSE_TIMEOUT_MS}ms")
+                LibraryResult.ofItem(item, null)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get item $mediaId", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_item")
@@ -284,7 +291,22 @@ class DashTuneSessionCallback(
         mediaItems: List<MediaItem>,
     ): ListenableFuture<List<MediaItem>> {
         Log.i(LOG_TAG, "onAddMediaItems $mediaItems")
-        return SuspendToFutureAdapter.launchFuture { resolver.resolveMediaItems(mediaItems) }
+        return SuspendToFutureAdapter.launchFuture {
+            try {
+                withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
+                    resolver.resolveMediaItems(mediaItems)
+                } ?: throw TimeoutException(
+                    "resolveMediaItems timed out after ${COMMAND_TIMEOUT_MS}ms"
+                )
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to add media items", e)
+                FirebaseUtils.safeSetCustomKey("failed_operation", "add_media_items")
+                FirebaseUtils.safeRecordException(e)
+                // Rethrow to complete the future exceptionally: Media3 drops this one
+                // command and keeps processing the queue, keeping the session usable.
+                throw e
+            }
+        }
     }
 
     override fun onSetMediaItems(
@@ -296,80 +318,102 @@ class DashTuneSessionCallback(
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
         Log.i(LOG_TAG, "onSetMediaItems ${mediaItems.size} items")
         return SuspendToFutureAdapter.launchFuture {
-            if (resolver.isSingleItemWithParent(mediaItems)) {
-                val singleItem = mediaItems[0]
-                val resolvedItems = resolver.expandSingleItem(singleItem)
-
-                val isAudiobookContent = resolvedItems.any {
-                    it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
-                }
-                handleAudiobookShuffle(mediaSession, isAudiobookContent)
-
-                if (isAudiobookContent) {
-                    val selectedId = singleItem.mediaId
-                    val selectedIndex = resolvedItems.indexOfFirst { it.mediaId == selectedId }.coerceAtLeast(0)
-                    try {
-                        val positionMs = withTimeoutOrNull(3000) {
-                            getChapterResumePosition(selectedId)
-                        } ?: 0L
-                        Log.i(LOG_TAG, "Audiobook chapter resume: index=$selectedIndex, position=$positionMs ms")
-                        val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
-                            resolvedItems,
-                            selectedIndex,
-                            positionMs
-                        )
-                        savePlaylist(resolvedItems)
-                        return@launchFuture mediaItemsWithStartPosition
-                    } catch (e: Exception) {
-                        Log.w(LOG_TAG, "Failed to get chapter resume position", e)
-                    }
-                }
-
-                val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
-                    resolvedItems,
-                    // indexOfFirst returns -1 when the selected item isn't among the resolved
-                    // children (e.g. stale cache); fall back to the first item.
-                    resolvedItems.indexOfFirst { it.mediaId == singleItem.mediaId }.coerceAtLeast(0),
-                    startPositionMs
+            try {
+                withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
+                    resolveSetMediaItems(mediaSession, mediaItems, startIndex, startPositionMs)
+                } ?: throw TimeoutException(
+                    "onSetMediaItems timed out after ${COMMAND_TIMEOUT_MS}ms"
                 )
-                savePlaylist(resolvedItems)
-                return@launchFuture mediaItemsWithStartPosition
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to set media items", e)
+                FirebaseUtils.safeSetCustomKey("failed_operation", "set_media_items")
+                FirebaseUtils.safeRecordException(e)
+                // Rethrow to complete the future exceptionally: the current queue keeps
+                // playing and the session stays responsive to later commands.
+                throw e
             }
+        }
+    }
 
-            val resolvedItems = resolver.resolveMediaItems(mediaItems)
+    private suspend fun resolveSetMediaItems(
+        mediaSession: MediaSession,
+        mediaItems: List<MediaItem>,
+        startIndex: Int,
+        startPositionMs: Long,
+    ): MediaSession.MediaItemsWithStartPosition {
+        if (resolver.isSingleItemWithParent(mediaItems)) {
+            val singleItem = mediaItems[0]
+            val resolvedItems = resolver.expandSingleItem(singleItem)
 
             val isAudiobookContent = resolvedItems.any {
                 it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
             }
             handleAudiobookShuffle(mediaSession, isAudiobookContent)
 
-            var finalStartIndex = startIndex
-            var finalStartPositionMs = startPositionMs
-
-            if (isAudiobookContent && mediaItems.size == 1) {
-                val bookId = mediaItems[0].mediaId
+            if (isAudiobookContent) {
+                val selectedId = singleItem.mediaId
+                val selectedIndex = resolvedItems.indexOfFirst { it.mediaId == selectedId }.coerceAtLeast(0)
                 try {
-                    val resumeInfo = withTimeoutOrNull(3000) {
-                        getAudiobookResumePosition(bookId, resolvedItems)
-                    }
-                    if (resumeInfo != null) {
-                        finalStartIndex = resumeInfo.first
-                        finalStartPositionMs = resumeInfo.second
-                        Log.i(LOG_TAG, "Audiobook resume: chapter=$finalStartIndex, position=$finalStartPositionMs ms")
-                    }
+                    val positionMs = withTimeoutOrNull(3000) {
+                        getChapterResumePosition(selectedId)
+                    } ?: 0L
+                    Log.i(LOG_TAG, "Audiobook chapter resume: index=$selectedIndex, position=$positionMs ms")
+                    val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
+                        resolvedItems,
+                        selectedIndex,
+                        positionMs
+                    )
+                    savePlaylist(resolvedItems)
+                    return mediaItemsWithStartPosition
                 } catch (e: Exception) {
-                    Log.w(LOG_TAG, "Failed to get audiobook resume position, using local fallback", e)
+                    Log.w(LOG_TAG, "Failed to get chapter resume position", e)
                 }
             }
 
             val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
                 resolvedItems,
-                finalStartIndex,
-                finalStartPositionMs
+                // indexOfFirst returns -1 when the selected item isn't among the resolved
+                // children (e.g. stale cache); fall back to the first item.
+                resolvedItems.indexOfFirst { it.mediaId == singleItem.mediaId }.coerceAtLeast(0),
+                startPositionMs
             )
             savePlaylist(resolvedItems)
-            mediaItemsWithStartPosition
+            return mediaItemsWithStartPosition
         }
+
+        val resolvedItems = resolver.resolveMediaItems(mediaItems)
+
+        val isAudiobookContent = resolvedItems.any {
+            it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+        }
+        handleAudiobookShuffle(mediaSession, isAudiobookContent)
+
+        var finalStartIndex = startIndex
+        var finalStartPositionMs = startPositionMs
+
+        if (isAudiobookContent && mediaItems.size == 1) {
+            val bookId = mediaItems[0].mediaId
+            try {
+                val resumeInfo = withTimeoutOrNull(3000) {
+                    getAudiobookResumePosition(bookId, resolvedItems)
+                }
+                if (resumeInfo != null) {
+                    finalStartIndex = resumeInfo.first
+                    finalStartPositionMs = resumeInfo.second
+                    Log.i(LOG_TAG, "Audiobook resume: chapter=$finalStartIndex, position=$finalStartPositionMs ms")
+                }
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to get audiobook resume position, using local fallback", e)
+            }
+        }
+
+        val mediaItemsWithStartPosition = MediaSession.MediaItemsWithStartPosition(
+            resolvedItems,
+            finalStartIndex,
+            finalStartPositionMs
+        )
+        savePlaylist(resolvedItems)
+        return mediaItemsWithStartPosition
     }
 
     private fun savePlaylist(resolvedItems: List<MediaItem>) {
@@ -465,9 +509,14 @@ class DashTuneSessionCallback(
                     Log.i(LOG_TAG, "Skipping ${savedIds.size - playableIds.size} unplayable tracks (offline + uncached)")
                 }
 
-                val mediaItemsToRestore = playableIds
-                    .map { async { repository.getItem(it) } }
-                    .awaitAll()
+                val mediaItemsToRestore = withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
+                    playableIds
+                        .map { async { repository.getItem(it) } }
+                        .awaitAll()
+                } ?: run {
+                    Log.w(LOG_TAG, "Playback resumption timed out after ${COMMAND_TIMEOUT_MS}ms")
+                    emptyList()
+                }
 
                 Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
                 FirebaseUtils.safeLog("Restoring playback: index=${prefs.getInt(PLAYLIST_INDEX_PREF, 0)}, trackCount=${mediaItemsToRestore.size}")
