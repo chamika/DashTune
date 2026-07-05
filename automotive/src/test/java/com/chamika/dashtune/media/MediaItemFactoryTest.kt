@@ -8,12 +8,14 @@ import androidx.test.core.app.ApplicationProvider
 import com.chamika.dashtune.AlbumArtContentProvider
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
@@ -163,11 +165,18 @@ class MediaItemFactoryTest {
     }
 
     @Test
-    fun `create folder is browsable and not playable`() {
+    fun `create folder is browsable and not playable and has no audiobook flag by default`() {
         val item = factory.create(baseItem(BaseItemKind.FOLDER))
 
         assertTrue(item.mediaMetadata.isBrowsable == true)
         assertFalse(item.mediaMetadata.isPlayable == true)
+        assertFalse(item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true)
+    }
+
+    @Test
+    fun `create folder with isAudiobook true sets audiobook flag`() {
+        val item = factory.create(baseItem(BaseItemKind.FOLDER), isAudiobook = true)
+
         assertTrue(item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true)
     }
 
@@ -250,6 +259,29 @@ class MediaItemFactoryTest {
         assertTrue(item.mediaMetadata.isBrowsable == true)
         assertFalse(item.mediaMetadata.isPlayable == true)
         assertEquals(MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS, item.mediaMetadata.mediaType)
+    }
+
+    @Test
+    fun `folders is browsable with FOLDERS id`() {
+        val item = factory.folders()
+
+        assertEquals(FOLDERS, item.mediaId)
+        assertTrue(item.mediaMetadata.isBrowsable == true)
+        assertFalse(item.mediaMetadata.isPlayable == true)
+        assertEquals(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, item.mediaMetadata.mediaType)
+    }
+
+    @Test
+    fun `shuffleAll is playable and not browsable with prefixed mediaId`() {
+        val item = factory.shuffleAll("folder-123")
+
+        assertEquals(SHUFFLE_FOLDER_PREFIX + "folder-123", item.mediaId)
+        assertFalse(item.mediaMetadata.isBrowsable == true)
+        assertTrue(item.mediaMetadata.isPlayable == true)
+        assertEquals(MediaMetadata.MEDIA_TYPE_PLAYLIST, item.mediaMetadata.mediaType)
+        assertNull(item.localConfiguration)
+        assertNull(item.mediaMetadata.extras?.getString(PARENT_KEY))
+        assertFalse(item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true)
     }
 
     // --- Group extras tests ---

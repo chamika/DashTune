@@ -5,6 +5,7 @@ import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
@@ -117,21 +118,36 @@ class JellyfinMediaTreeTest {
     }
 
     @Test
-    fun `getActiveCategoryIds returns all five categories in canonical order`() {
+    fun `getActiveCategoryIds returns all six categories in canonical order`() {
         PreferenceManager.getDefaultSharedPreferences(context).edit()
             .putStringSet(
                 "browse_categories",
-                setOf("random", "playlists", "books", "favourites", "latest")
+                setOf("random", "playlists", "books", "favourites", "latest", "folders")
             )
             .commit()
 
         val ids = tree.getActiveCategoryIds()
 
-        assertEquals(5, ids.size)
+        assertEquals(6, ids.size)
         assertEquals(LATEST_ALBUMS, ids[0])
         assertEquals(FAVOURITES, ids[1])
         assertEquals(BOOKS, ids[2])
         assertEquals(PLAYLISTS, ids[3])
         assertEquals(RANDOM_ALBUMS, ids[4])
+        assertEquals(FOLDERS, ids[5])
+    }
+
+    @Test
+    fun `getActiveCategoryIds includes folders when that category is selected`() {
+        PreferenceManager.getDefaultSharedPreferences(context).edit()
+            .putStringSet("browse_categories", setOf("latest", "favourites", "folders"))
+            .commit()
+
+        val ids = tree.getActiveCategoryIds()
+
+        assertEquals(3, ids.size)
+        assertTrue(ids.contains(LATEST_ALBUMS))
+        assertTrue(ids.contains(FAVOURITES))
+        assertTrue(ids.contains(FOLDERS))
     }
 }

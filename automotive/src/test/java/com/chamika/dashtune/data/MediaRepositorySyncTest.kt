@@ -12,6 +12,7 @@ import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
@@ -184,6 +185,24 @@ class MediaRepositorySyncTest {
         repository.sync()
 
         coVerify(exactly = 0) { tree.getChildren("track-1") }
+    }
+
+    @Test
+    fun `sync does not recursively fetch children for the folders section`() = runTest {
+        val folder = buildMediaItem(
+            "folder-1",
+            title = "Folder",
+            mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS,
+            isPlayable = false,
+            isBrowsable = true
+        )
+
+        coEvery { tree.getActiveCategoryIds() } returns listOf(FOLDERS)
+        coEvery { tree.getChildren(FOLDERS) } returns listOf(folder)
+
+        repository.sync()
+
+        coVerify(exactly = 0) { tree.getChildren("folder-1") }
     }
 
     @Test
@@ -587,6 +606,17 @@ class MediaRepositorySyncTest {
         val result = repository.getItem(BOOKS)
 
         assertEquals(BOOKS, result.mediaId)
+    }
+
+    @Test
+    fun `getItem for FOLDERS delegates to tree`() = runTest {
+        val item = buildMediaItem(FOLDERS, mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+        coEvery { tree.getItem(FOLDERS) } returns item
+
+        val result = repository.getItem(FOLDERS)
+
+        assertEquals(FOLDERS, result.mediaId)
+        coVerify(exactly = 0) { dao.getItem(any()) }
     }
 
     // --- getContentParentId with multiple parents tests ---

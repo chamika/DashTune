@@ -4,17 +4,21 @@ import android.content.Context
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_ARTIST
+import androidx.media3.common.MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_PLAYLIST
 import androidx.preference.PreferenceManager
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.R
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_FOLDER_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
 import com.google.common.cache.Cache
 import com.google.common.cache.CacheBuilder
 import kotlinx.coroutines.CancellationException
@@ -36,6 +40,7 @@ import java.net.ConnectException
 import java.util.concurrent.TimeoutException
 
 private const val MAX_ITEMS = 120
+private const val SHUFFLE_MAX_ITEMS = 500
 private const val REQUEST_HARD_TIMEOUT_MS = 10_000L
 
 class JellyfinMediaTree(
@@ -61,7 +66,8 @@ class JellyfinMediaTree(
             "favourites" to FAVOURITES,
             "books" to BOOKS,
             "playlists" to PLAYLISTS,
-            "random" to RANDOM_ALBUMS
+            "random" to RANDOM_ALBUMS,
+            "folders" to FOLDERS
         )
         val validKeys = canonicalOrder.map { it.first }.toSet()
         val validSelected = selected.intersect(validKeys)
@@ -103,15 +109,22 @@ class JellyfinMediaTree(
 
     suspend fun getItem(id: String): MediaItem {
         if (mediaItems.getIfPresent(id) == null) {
-            val newItem = when (id) {
-                ROOT_ID -> itemFactory.rootNode()
-                LATEST_ALBUMS -> itemFactory.latestAlbums()
-                RANDOM_ALBUMS -> itemFactory.randomAlbums()
-                FAVOURITES -> itemFactory.favourites()
-                PLAYLISTS -> itemFactory.playlists()
-                BOOKS -> itemFactory.books()
+            val newItem = when {
+                id == ROOT_ID -> itemFactory.rootNode()
+                id == LATEST_ALBUMS -> itemFactory.latestAlbums()
+                id == RANDOM_ALBUMS -> itemFactory.randomAlbums()
+                id == FAVOURITES -> itemFactory.favourites()
+                id == PLAYLISTS -> itemFactory.playlists()
+                id == BOOKS -> itemFactory.books()
+                id == FOLDERS -> itemFactory.folders()
+                id.startsWith(SHUFFLE_FOLDER_PREFIX) ->
+                    itemFactory.shuffleAll(id.removePrefix(SHUFFLE_FOLDER_PREFIX))
                 else -> retryOnFailure {
                     val response = api.userLibraryApi.getItem(id.toUUID())
+                    // Note: cold-fetching a book folder by ID (tree cache evicted, not in
+                    // Room) loses the isAudiobook flag since it's not inferrable from the
+                    // DTO alone. Mitigated by repository.getItem checking Room first and by
+                    // browse flows always warming the tree cache parent-before-child.
                     itemFactory.create(response.content)
                 }
             }
@@ -130,6 +143,7 @@ class JellyfinMediaTree(
             FAVOURITES -> getFavourite()
             PLAYLISTS -> getPlaylists()
             BOOKS -> getBooks()
+            FOLDERS -> getFolders()
             else -> getItemChildren(id)
         }
     }
@@ -192,7 +206,7 @@ class JellyfinMediaTree(
 
         response.content.items.mapNotNull {
             try {
-                val item = itemFactory.create(it)
+                val item = itemFactory.create(it, isAudiobook = true)
                 mediaItems.put(item.mediaId, item)
                 item
             } catch (e: UnsupportedOperationException) {
@@ -202,10 +216,42 @@ class JellyfinMediaTree(
         }
     }
 
+    private suspend fun getFolders(): List<MediaItem> {
+        val musicLibraries = retryOnFailure {
+            val views = api.userViewsApi.getUserViews()
+            views.content.items.filter { it.collectionType == CollectionType.MUSIC }
+        }
+
+        return when {
+            musicLibraries.isEmpty() -> emptyList()
+            musicLibraries.size == 1 -> {
+                val library = musicLibraries.first()
+                val libraryId = library.id.toString()
+                // Seed the cache so getItemChildren sees a MEDIA_TYPE_FOLDER_ALBUMS
+                // parent (not an unsupported COLLECTION_FOLDER kind) and injects
+                // "Shuffle all" for the root itself.
+                mediaItems.put(libraryId, itemFactory.forFolder(library, isFolderBrowse = true))
+                getItemChildren(libraryId)
+            }
+            else -> musicLibraries.map {
+                val item = itemFactory.forFolder(it, isFolderBrowse = true)
+                mediaItems.put(item.mediaId, item)
+                item
+            }
+        }
+    }
+
     private suspend fun getItemChildren(id: String): List<MediaItem> {
         val parentItem = getItem(id)
+        val isFolderBrowse = parentItem.mediaMetadata.extras?.getBoolean(IS_FOLDER_KEY) == true
 
-        if (parentItem.mediaMetadata.mediaType == MEDIA_TYPE_ARTIST) {
+        // Jellyfin's music library organizes content by Artist/Album metadata rather than
+        // raw filesystem folders, so nested folders can come back typed as MUSIC_ARTIST.
+        // Outside folder browsing that's a deliberate shortcut ("show albums by this
+        // artist"); inside folder browsing it must fall through to a literal parentId
+        // children query below, since the artist-albums query returns nothing for a
+        // directory that isn't a real tagged artist.
+        if (parentItem.mediaMetadata.mediaType == MEDIA_TYPE_ARTIST && !isFolderBrowse) {
             return getArtistAlbums(id)
         }
 
@@ -221,7 +267,7 @@ class JellyfinMediaTree(
             sortBy = listOf(ItemSortBy.DEFAULT)
         }
 
-        return retryOnFailure {
+        val children = retryOnFailure {
             val response = api.itemsApi.getItems(
                 sortBy = sortBy,
                 parentId = id.toUUID()
@@ -229,13 +275,47 @@ class JellyfinMediaTree(
 
             response.content.items.mapNotNull {
                 try {
-                    val item = itemFactory.create(it, parent = id, isAudiobook = isAudiobook)
+                    val item = itemFactory.create(
+                        it,
+                        parent = id,
+                        isAudiobook = isAudiobook,
+                        isFolderBrowse = isFolderBrowse
+                    )
                     mediaItems.put(item.mediaId, item)
                     item
                 } catch (e: UnsupportedOperationException) {
                     Log.w(LOG_TAG, "Skipping unsupported item type: ${it.type}")
                     null
                 }
+            }
+        }
+
+        if (isFolderBrowse && children.isNotEmpty()) {
+            val shuffle = itemFactory.shuffleAll(id)
+            mediaItems.put(shuffle.mediaId, shuffle)
+            return listOf(shuffle) + children
+        }
+
+        return children
+    }
+
+    suspend fun getShuffledTracks(folderId: String): List<MediaItem> = retryOnFailure {
+        val response = api.itemsApi.getItems(
+            parentId = folderId.toUUID(),
+            recursive = true,
+            includeItemTypes = listOf(BaseItemKind.AUDIO),
+            sortBy = listOf(ItemSortBy.RANDOM),
+            limit = SHUFFLE_MAX_ITEMS
+        )
+
+        response.content.items.mapNotNull {
+            try {
+                val item = itemFactory.create(it)
+                mediaItems.put(item.mediaId, item)
+                item
+            } catch (e: UnsupportedOperationException) {
+                Log.w(LOG_TAG, "Skipping unsupported item type in shuffle: ${it.type}")
+                null
             }
         }
     }

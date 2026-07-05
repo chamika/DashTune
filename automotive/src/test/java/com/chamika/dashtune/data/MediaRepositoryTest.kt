@@ -428,6 +428,113 @@ class MediaRepositoryTest {
         assertEquals(0, result.size)
     }
 
+    // --- getShuffledTracks tests ---
+
+    @Test
+    fun `getShuffledTracks delegates to tree`() = runTest {
+        val shuffled = listOf(
+            MediaItem.Builder()
+                .setMediaId("track-1")
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle("Track 1")
+                        .setIsPlayable(true)
+                        .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                        .build()
+                )
+                .build()
+        )
+        coEvery { tree.getShuffledTracks("folder-1") } returns shuffled
+
+        val result = repository.getShuffledTracks("folder-1")
+
+        assertEquals(1, result.size)
+        assertEquals("track-1", result[0].mediaId)
+    }
+
+    @Test
+    fun `getShuffledTracks falls back to cached descendants when tree throws`() = runTest {
+        coEvery { tree.getShuffledTracks("folder-1") } throws RuntimeException("Network unavailable")
+
+        val trackEntity = CachedMediaItemEntity(
+            mediaId = "track-1",
+            parentId = "sub-folder-1",
+            title = "Cached Track",
+            subtitle = null,
+            artUri = null,
+            mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+            isPlayable = true,
+            isBrowsable = false,
+            sortOrder = 0,
+            durationMs = null,
+            isFavorite = false,
+            extras = null
+        )
+        val subFolderEntity = CachedMediaItemEntity(
+            mediaId = "sub-folder-1",
+            parentId = "folder-1",
+            title = "Sub Folder",
+            subtitle = null,
+            artUri = null,
+            mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS,
+            isPlayable = false,
+            isBrowsable = true,
+            sortOrder = 0,
+            durationMs = null,
+            isFavorite = false,
+            extras = null
+        )
+
+        coEvery { dao.getChildrenByParent("folder-1") } returns listOf(subFolderEntity)
+        coEvery { dao.getChildrenByParent("sub-folder-1") } returns listOf(trackEntity)
+
+        val result = repository.getShuffledTracks("folder-1")
+
+        assertEquals(1, result.size)
+        assertEquals("track-1", result[0].mediaId)
+    }
+
+    @Test
+    fun `getShuffledTracks fallback skips non-music playable rows like the shuffle pseudo-item`() = runTest {
+        coEvery { tree.getShuffledTracks("folder-1") } throws RuntimeException("Network unavailable")
+
+        val shufflePseudoItem = CachedMediaItemEntity(
+            mediaId = "SHUFFLE_FOLDER:folder-1",
+            parentId = "folder-1",
+            title = "Shuffle all",
+            subtitle = null,
+            artUri = null,
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST,
+            isPlayable = true,
+            isBrowsable = false,
+            sortOrder = 0,
+            durationMs = null,
+            isFavorite = false,
+            extras = null
+        )
+        val trackEntity = CachedMediaItemEntity(
+            mediaId = "track-1",
+            parentId = "folder-1",
+            title = "Cached Track",
+            subtitle = null,
+            artUri = null,
+            mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+            isPlayable = true,
+            isBrowsable = false,
+            sortOrder = 1,
+            durationMs = null,
+            isFavorite = false,
+            extras = null
+        )
+
+        coEvery { dao.getChildrenByParent("folder-1") } returns listOf(shufflePseudoItem, trackEntity)
+
+        val result = repository.getShuffledTracks("folder-1")
+
+        assertEquals(1, result.size)
+        assertEquals("track-1", result[0].mediaId)
+    }
+
     // --- search delegate test ---
 
     @Test

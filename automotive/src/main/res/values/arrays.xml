@@ -64,6 +64,7 @@
         <item>Books</item>
         <item>Playlists</item>
         <item>Random</item>
+        <item>Folders</item>
     </string-array>
 
     <string-array name="browseCategoryValues">
@@ -72,6 +73,7 @@
         <item>books</item>
         <item>playlists</item>
         <item>random</item>
+        <item>folders</item>
     </string-array>
 
     <string-array name="defaultBrowseCategories">

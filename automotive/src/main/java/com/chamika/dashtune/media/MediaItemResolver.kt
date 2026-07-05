@@ -7,6 +7,7 @@ import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
 
 class MediaItemResolver(
     private val repository: MediaRepository
@@ -16,6 +17,13 @@ class MediaItemResolver(
         val playlist = mutableListOf<MediaItem>()
 
         mediaItems.forEach {
+            if (it.mediaId.startsWith(SHUFFLE_FOLDER_PREFIX)) {
+                playlist.addAll(
+                    repository.getShuffledTracks(it.mediaId.removePrefix(SHUFFLE_FOLDER_PREFIX))
+                )
+                return@forEach
+            }
+
             val item = repository.getItem(it.mediaId)
             val isAudiobook = item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
             val isExpandable = (item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_ALBUM ||
@@ -46,6 +54,10 @@ class MediaItemResolver(
     suspend fun isSingleItemWithParent(mediaItems: List<MediaItem>): Boolean {
         if (mediaItems.size != 1) return false
         val mediaId = mediaItems[0].mediaId
+        // A shuffle pseudo-item may be cached as a normal folder child in Room, which
+        // would make the DB-parent fallback below misidentify it as "one track from a
+        // folder" and play only that folder's immediate children non-recursively.
+        if (mediaId.startsWith(SHUFFLE_FOLDER_PREFIX)) return false
         val item = repository.getItem(mediaId)
         if (item.mediaMetadata.extras?.containsKey(PARENT_KEY) == true) return true
         // Fall back to DB parent relationship (handles stale cache)
