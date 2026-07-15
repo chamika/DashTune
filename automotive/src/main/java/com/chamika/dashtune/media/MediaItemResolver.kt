@@ -59,6 +59,19 @@ class MediaItemResolver(
         // folder" and play only that folder's immediate children non-recursively.
         if (mediaId.startsWith(SHUFFLE_FOLDER_PREFIX)) return false
         val item = repository.getItem(mediaId)
+        // An album/playlist is itself an expandable container: tapping it should play its
+        // own tracks, not expand the whole parent folder. In folder browse these have a
+        // (non-static) folder as parent, so without this they'd be treated as "one item
+        // within a parent" — resolveMediaItems would expand every sibling album and the
+        // selected album's id would vanish from the queue, starting playback on the wrong
+        // track. Audiobooks keep the parent-expand path so chapter resume still works.
+        val isAudiobook = item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+        val mediaType = item.mediaMetadata.mediaType
+        if (!isAudiobook && (mediaType == MediaMetadata.MEDIA_TYPE_ALBUM ||
+                mediaType == MediaMetadata.MEDIA_TYPE_PLAYLIST)
+        ) {
+            return false
+        }
         if (item.mediaMetadata.extras?.containsKey(PARENT_KEY) == true) return true
         // Fall back to DB parent relationship (handles stale cache)
         return repository.getContentParentId(mediaId) != null
@@ -69,6 +82,12 @@ class MediaItemResolver(
             ?: repository.getContentParentId(item.mediaId)
             ?: return listOf(item)
         val children = repository.getChildren(parentId)
+            // Folder-browse children carry an injected "Shuffle all" pseudo-item at the
+            // front. It's a browse-only affordance, not a real sibling — resolving it would
+            // splice a whole random shuffle of the folder's descendants into the queue and
+            // start playback on the wrong track. Drop it so tapping a song plays that song
+            // and its actual siblings in order.
+            .filterNot { it.mediaId.startsWith(SHUFFLE_FOLDER_PREFIX) }
         return resolveMediaItems(children)
     }
 }
