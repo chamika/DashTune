@@ -6,6 +6,7 @@ import androidx.media3.common.MediaMetadata
 import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -288,7 +289,89 @@ class MediaItemResolverTest {
         assertEquals(0, result.size)
     }
 
+    @Test
+    fun `shuffle folder pseudo-item expands via repository getShuffledTracks`() = runTest {
+        val shuffleItem = buildMediaItem(
+            mediaId = SHUFFLE_FOLDER_PREFIX + "folder-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST,
+            isPlayable = true,
+            isBrowsable = false
+        )
+        val track1 = buildMediaItem(
+            mediaId = "track-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+            isPlayable = true,
+            isBrowsable = false,
+            uri = "http://server/audio/track-1"
+        )
+        val track2 = buildMediaItem(
+            mediaId = "track-2",
+            mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+            isPlayable = true,
+            isBrowsable = false,
+            uri = "http://server/audio/track-2"
+        )
+
+        coEvery { repository.getShuffledTracks("folder-1") } returns listOf(track1, track2)
+
+        val result = resolver.resolveMediaItems(listOf(shuffleItem))
+
+        assertEquals(2, result.size)
+        assertEquals("track-1", result[0].mediaId)
+        assertEquals("track-2", result[1].mediaId)
+    }
+
+    @Test
+    fun `mixed shuffle item and regular track both resolve`() = runTest {
+        val shuffleItem = buildMediaItem(
+            mediaId = SHUFFLE_FOLDER_PREFIX + "folder-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST,
+            isPlayable = true,
+            isBrowsable = false
+        )
+        val shuffledTrack = buildMediaItem(
+            mediaId = "track-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+            isPlayable = true,
+            isBrowsable = false,
+            uri = "http://server/audio/track-1"
+        )
+        val directTrack = buildMediaItem(
+            mediaId = "track-2",
+            mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+            isPlayable = true,
+            isBrowsable = false,
+            uri = "http://server/audio/track-2"
+        )
+
+        coEvery { repository.getShuffledTracks("folder-1") } returns listOf(shuffledTrack)
+        coEvery { repository.getItem("track-2") } returns directTrack
+
+        val result = resolver.resolveMediaItems(listOf(shuffleItem, directTrack))
+
+        assertEquals(2, result.size)
+        assertEquals("track-1", result[0].mediaId)
+        assertEquals("track-2", result[1].mediaId)
+    }
+
     // --- isSingleItemWithParent tests ---
+
+    @Test
+    fun `isSingleItemWithParent returns false for shuffle folder id without querying repository`() = runTest {
+        val shuffleItem = buildMediaItem(
+            mediaId = SHUFFLE_FOLDER_PREFIX + "folder-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST,
+            isPlayable = true,
+            isBrowsable = false
+        )
+
+        // Deliberately not stubbing repository.getItem/getContentParentId: if the guard
+        // didn't short-circuit before touching the repository, this strict mock would
+        // throw on the unstubbed call and fail the test.
+        assertFalse(resolver.isSingleItemWithParent(listOf(shuffleItem)))
+    }
+
+
 
     @Test
     fun `isSingleItemWithParent returns true when item has PARENT_KEY`() = runTest {

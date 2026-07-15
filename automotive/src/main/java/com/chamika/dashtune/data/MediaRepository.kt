@@ -20,6 +20,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.FirebaseUtils
@@ -35,7 +36,7 @@ class MediaRepository(
 
     private val syncMutex = Mutex()
 
-    private val staticIds = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS)
+    private val staticIds = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS)
 
     suspend fun getItem(id: String): MediaItem {
         if (id in staticIds) {
@@ -81,6 +82,26 @@ class MediaRepository(
         return tree.search(query)
     }
 
+    suspend fun getShuffledTracks(folderId: String): List<MediaItem> {
+        return try {
+            tree.getShuffledTracks(folderId)
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Shuffle query failed for $folderId, falling back to cache", e)
+            cachedDescendantTracks(folderId).shuffled()
+        }
+    }
+
+    private suspend fun cachedDescendantTracks(folderId: String, depth: Int = 0): List<MediaItem> {
+        if (depth > 10) return emptyList()
+        return dao.getChildrenByParent(folderId).flatMap {
+            when {
+                it.isPlayable && it.mediaType == MEDIA_TYPE_MUSIC -> listOf(it.toMediaItem())
+                it.isBrowsable -> cachedDescendantTracks(it.mediaId, depth + 1)
+                else -> emptyList()
+            }
+        }
+    }
+
     fun invalidateCache() {
         tree.invalidateCache()
     }
@@ -97,7 +118,12 @@ class MediaRepository(
                 val children = tree.getChildren(sectionId)
                 children.forEachIndexed { index, item ->
                     allEntities.add(item.toEntity(sectionId, index))
-                    syncChildrenRecursively(item, allEntities)
+                    // Folders can be arbitrarily deep on-disk trees; don't let a full
+                    // recursive crawl turn a routine sync into a library-sized fetch.
+                    // Deeper levels cache lazily via getChildren as the user browses.
+                    if (sectionId != FOLDERS) {
+                        syncChildrenRecursively(item, allEntities)
+                    }
                 }
                 anySuccess = true
             } catch (e: Exception) {

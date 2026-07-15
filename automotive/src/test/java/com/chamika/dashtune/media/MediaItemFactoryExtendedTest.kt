@@ -8,6 +8,7 @@ import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
 import com.chamika.dashtune.AlbumArtContentProvider
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_FOLDER_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
@@ -153,6 +154,20 @@ class MediaItemFactoryExtendedTest {
         val item = factory.create(dto)
 
         assertEquals(MediaMetadata.MEDIA_TYPE_ARTIST, item.mediaMetadata.mediaType)
+        assertFalse(item.mediaMetadata.extras?.getBoolean(IS_FOLDER_KEY) == true)
+    }
+
+    @Test
+    fun `create dispatches MUSIC_ARTIST to forArtist with isFolderBrowse flag propagated`() {
+        // Jellyfin's music library organizes content by Artist metadata, so a folder that
+        // isn't a real recognized artist can still come back as MUSIC_ARTIST. The Folders
+        // category needs this flag on the resulting item so tree traversal treats it as a
+        // literal folder (see JellyfinMediaTree.getItemChildren) instead of redirecting to
+        // an artist-albums query that would return nothing.
+        val dto = BaseItemDto(id = UUID.randomUUID(), type = BaseItemKind.MUSIC_ARTIST, name = "Songs")
+        val item = factory.create(dto, isFolderBrowse = true)
+
+        assertTrue(item.mediaMetadata.extras?.getBoolean(IS_FOLDER_KEY) == true)
     }
 
     @Test
@@ -178,6 +193,22 @@ class MediaItemFactoryExtendedTest {
 
         assertTrue(item.mediaMetadata.isBrowsable == true)
         assertFalse(item.mediaMetadata.isPlayable == true)
+        assertFalse(item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true)
+    }
+
+    @Test
+    fun `create dispatches FOLDER to forFolder with isFolderBrowse flag propagated`() {
+        val dto = BaseItemDto(id = UUID.randomUUID(), type = BaseItemKind.FOLDER, name = "Folder")
+        val item = factory.create(dto, isFolderBrowse = true)
+
+        assertTrue(item.mediaMetadata.extras?.getBoolean(IS_FOLDER_KEY) == true)
+    }
+
+    @Test
+    fun `create dispatches FOLDER to forFolder with isAudiobook flag propagated`() {
+        val dto = BaseItemDto(id = UUID.randomUUID(), type = BaseItemKind.FOLDER, name = "Folder")
+        val item = factory.create(dto, isAudiobook = true)
+
         assertTrue(item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true)
     }
 

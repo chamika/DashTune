@@ -30,6 +30,8 @@
     <string name="sign_out_confirm">Sign out</string>
     <string name="cancel">Cancel</string>
     <string name="books">Books</string>
+    <string name="folders">Folders</string>
+    <string name="shuffle_all">Shuffle all</string>
     <string name="browse_categories">Browse categories</string>
     <string name="browse_categories_summary">Choose which categories appear (2–4)</string>
     <string name="min_categories_warning">Select at least 2 categories</string>

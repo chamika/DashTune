@@ -12,6 +12,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaConstants
 import androidx.preference.PreferenceManager
 import com.chamika.dashtune.AlbumArtContentProvider
+import com.chamika.dashtune.R
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.universalAudioApi
 import org.jellyfin.sdk.api.operations.ImageApi
@@ -35,8 +36,11 @@ class MediaItemFactory(
         const val FAVOURITES = "FAVOURITES_ID"
         const val PLAYLISTS = "PLAYLISTS_ID"
         const val BOOKS = "BOOKS_ID"
+        const val FOLDERS = "FOLDERS_ID"
+        const val SHUFFLE_FOLDER_PREFIX = "SHUFFLE_FOLDER:"
         const val PARENT_KEY = "PARENT_KEY"
         const val IS_AUDIOBOOK_KEY = "is_audiobook"
+        const val IS_FOLDER_KEY = "is_folder_browse"
 
         private const val EXTRA_COMPLETION_STATUS = "android.media.extra.COMPLETION_STATUS"
         private const val EXTRA_COMPLETION_PERCENTAGE = "android.media.extra.COMPLETION_PERCENTAGE"
@@ -115,6 +119,32 @@ class MediaItemFactory(
         return albumCategory(BOOKS, "Books", "ic_book")
     }
 
+    fun folders(): MediaItem {
+        val extras = Bundle()
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(context.getString(R.string.folders))
+            .setIsBrowsable(true)
+            .setIsPlayable(false)
+            .setArtworkUri("android.resource://com.chamika.dashtune/drawable/ic_folder".toUri())
+            .setExtras(extras)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(FOLDERS)
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
     private fun albumCategory(id: String, label: String, icon: String): MediaItem {
         val extras = Bundle()
         extras.putInt(
@@ -141,10 +171,13 @@ class MediaItemFactory(
             .build()
     }
 
-    private fun forArtist(item: BaseItemDto, group: String? = null): MediaItem {
+    private fun forArtist(item: BaseItemDto, group: String? = null, isFolderBrowse: Boolean = false): MediaItem {
         val extras = Bundle()
         if (group != null) {
             extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
+        }
+        if (isFolderBrowse) {
+            extras.putBoolean(IS_FOLDER_KEY, true)
         }
 
         extras.putInt(
@@ -253,12 +286,22 @@ class MediaItemFactory(
             .build()
     }
 
-    fun forFolder(item: BaseItemDto, group: String? = null): MediaItem {
+    fun forFolder(
+        item: BaseItemDto,
+        group: String? = null,
+        isAudiobook: Boolean = false,
+        isFolderBrowse: Boolean = false
+    ): MediaItem {
         val extras = Bundle()
         if (group != null) {
             extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
         }
-        extras.putBoolean(IS_AUDIOBOOK_KEY, true)
+        if (isAudiobook) {
+            extras.putBoolean(IS_AUDIOBOOK_KEY, true)
+        }
+        if (isFolderBrowse) {
+            extras.putBoolean(IS_FOLDER_KEY, true)
+        }
         extras.putInt(
             MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
             MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
@@ -279,6 +322,28 @@ class MediaItemFactory(
 
         return MediaItem.Builder()
             .setMediaId(item.id.toString())
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    fun shuffleAll(folderId: String): MediaItem {
+        val extras = Bundle()
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(context.getString(R.string.shuffle_all))
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .setArtworkUri("android.resource://com.chamika.dashtune/drawable/ic_shuffle".toUri())
+            .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
+            .setExtras(extras)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(SHUFFLE_FOLDER_PREFIX + folderId)
             .setMediaMetadata(metadata)
             .build()
     }
@@ -378,13 +443,15 @@ class MediaItemFactory(
         baseItemDto: BaseItemDto,
         group: String? = null,
         parent: String? = null,
-        isAudiobook: Boolean = false
+        isAudiobook: Boolean = false,
+        isFolderBrowse: Boolean = false
     ): MediaItem {
         return when (baseItemDto.type) {
-            BaseItemKind.MUSIC_ARTIST -> forArtist(baseItemDto, group)
+            BaseItemKind.MUSIC_ARTIST -> forArtist(baseItemDto, group, isFolderBrowse)
             BaseItemKind.MUSIC_ALBUM -> forAlbum(baseItemDto, group)
             BaseItemKind.AUDIO_BOOK -> forAudiobook(baseItemDto, group, parent)
-            BaseItemKind.FOLDER -> forFolder(baseItemDto, group)
+            BaseItemKind.FOLDER -> forFolder(baseItemDto, group, isAudiobook, isFolderBrowse)
+            BaseItemKind.COLLECTION_FOLDER -> forFolder(baseItemDto, group, isAudiobook, isFolderBrowse)
             BaseItemKind.PLAYLIST -> forPlaylist(baseItemDto, group)
             BaseItemKind.AUDIO -> forTrack(baseItemDto, group, parent, isAudiobook)
             else -> throw UnsupportedOperationException("Can't create mediaItem for ${baseItemDto.type}")
