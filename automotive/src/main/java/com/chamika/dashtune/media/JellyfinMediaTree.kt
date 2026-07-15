@@ -121,11 +121,22 @@ class JellyfinMediaTree(
                     itemFactory.shuffleAll(id.removePrefix(SHUFFLE_FOLDER_PREFIX))
                 else -> retryOnFailure {
                     val response = api.userLibraryApi.getItem(id.toUUID())
-                    // Note: cold-fetching a book folder by ID (tree cache evicted, not in
-                    // Room) loses the isAudiobook flag since it's not inferrable from the
-                    // DTO alone. Mitigated by repository.getItem checking Room first and by
-                    // browse flows always warming the tree cache parent-before-child.
-                    itemFactory.create(response.content)
+                    val dto = response.content
+                    // A CollectionFolder is a top-level music library, only reachable via
+                    // the Folders category, so rebuild it as a folder-browse node. Without
+                    // this, create() can't build a CollectionFolder at all and throws — the
+                    // "Media isn't available" crash when the tree cache is cold (e.g. after
+                    // a sync/invalidateCache re-fills Room but never re-seeds the tree cache
+                    // via getFolders).
+                    if (dto.type == BaseItemKind.COLLECTION_FOLDER) {
+                        itemFactory.forFolder(dto, isFolderBrowse = true)
+                    } else {
+                        // Note: cold-fetching a book folder by ID (tree cache evicted, not in
+                        // Room) loses the isAudiobook flag since it's not inferrable from the
+                        // DTO alone. Mitigated by repository.getItem checking Room first and by
+                        // browse flows always warming the tree cache parent-before-child.
+                        itemFactory.create(dto)
+                    }
                 }
             }
 

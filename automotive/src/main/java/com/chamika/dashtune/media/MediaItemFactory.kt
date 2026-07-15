@@ -451,6 +451,7 @@ class MediaItemFactory(
             BaseItemKind.MUSIC_ALBUM -> forAlbum(baseItemDto, group)
             BaseItemKind.AUDIO_BOOK -> forAudiobook(baseItemDto, group, parent)
             BaseItemKind.FOLDER -> forFolder(baseItemDto, group, isAudiobook, isFolderBrowse)
+            BaseItemKind.COLLECTION_FOLDER -> forFolder(baseItemDto, group, isAudiobook, isFolderBrowse)
             BaseItemKind.PLAYLIST -> forPlaylist(baseItemDto, group)
             BaseItemKind.AUDIO -> forTrack(baseItemDto, group, parent, isAudiobook)
             else -> throw UnsupportedOperationException("Can't create mediaItem for ${baseItemDto.type}")
