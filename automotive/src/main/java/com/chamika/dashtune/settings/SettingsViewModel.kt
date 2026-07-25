@@ -29,6 +29,26 @@ class SettingsViewModel @Inject constructor(
     fun versionString(): CharSequence =
         "DashTune: ${jellyfin.clientInfo?.version}, Jellyfin API: ${Jellyfin.apiVersion}"
 
+    fun forceExit() {
+        context.startService(Intent(context, DashTuneMusicService::class.java).apply {
+            action = DashTuneMusicService.ACTION_FORCE_EXIT
+        })
+    }
+
+    suspend fun clearCache() {
+        withContext(Dispatchers.IO) {
+            mediaCacheDao.deleteAll()
+            AlbumArtContentProvider.clearCache(context.cacheDir)
+        }
+        PreferenceManager.getDefaultSharedPreferences(context).edit().apply {
+            remove("last_sync_timestamp")
+            apply()
+        }
+        context.startService(Intent(context, DashTuneMusicService::class.java).apply {
+            action = DashTuneMusicService.ACTION_REFRESH_LIBRARY
+        })
+    }
+
     suspend fun logout() {
         context.startService(Intent(context, DashTuneMusicService::class.java).apply {
             action = DashTuneMusicService.ACTION_STOP_PLAYBACK

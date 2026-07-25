@@ -65,6 +65,7 @@ import org.jellyfin.sdk.model.api.RepeatMode
 import org.jellyfin.sdk.model.api.UpdateUserItemDataDto
 import org.jellyfin.sdk.model.serializer.toUUID
 import kotlin.time.Duration.Companion.seconds
+import kotlin.system.exitProcess
 import java.io.File
 import java.util.concurrent.Executors
 import javax.inject.Inject
@@ -76,9 +77,18 @@ class DashTuneMusicService : MediaLibraryService() {
     companion object {
         const val ACTION_STOP_PLAYBACK = "com.chamika.dashtune.ACTION_STOP_PLAYBACK"
         const val ACTION_REFRESH_LIBRARY = "com.chamika.dashtune.ACTION_REFRESH_LIBRARY"
+        const val ACTION_FORCE_EXIT = "com.chamika.dashtune.ACTION_FORCE_EXIT"
 
         internal const val AUDIOBOOK_POSITION_REPORT_INTERVAL_MS = 30_000L
         internal const val MILLISECONDS_TO_TICKS = 10_000L
+
+        /**
+         * Delay before killing the process after [ACTION_FORCE_EXIT] calls stopSelf(). onDestroy()
+         * runs as a main-looper message, so this must be long enough for it to release the media
+         * session, player and caches first - otherwise the SimpleCache lock on the ExoPlayer disk
+         * cache can be left held, and a stale foreground notification can linger.
+         */
+        internal const val FORCE_EXIT_DELAY_MS = 500L
 
         /**
          * How long playback may stay suppressed by a transient audio-focus loss before we treat
@@ -515,6 +525,17 @@ class DashTuneMusicService : MediaLibraryService() {
             if (::mediaLibrarySession.isInitialized) {
                 mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
             }
+            return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_FORCE_EXIT) {
+            Log.i(LOG_TAG, "Force exit requested")
+            FirebaseUtils.safeLog("Force exit requested")
+            if (::mediaLibrarySession.isInitialized) {
+                mediaLibrarySession.player.stop()
+                mediaLibrarySession.player.clearMediaItems()
+            }
+            stopSelf()
+            handler.postDelayed({ exitProcess(0) }, FORCE_EXIT_DELAY_MS)
             return START_NOT_STICKY
         }
         return super.onStartCommand(intent, flags, startId)
