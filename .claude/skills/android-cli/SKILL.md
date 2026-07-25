@@ -41,6 +41,10 @@ For example: `android create empty-activity --name="My App" --output=./my-app`
 ## Interacting with devices
 For more information on interacting with running devices, see [here](references/interact.md)
 
+## Android Automotive (AAOS) — this project's target
+DashTune runs on Android Automotive, not a phone. The emulator, the way the app is reached, and
+the UI you have to navigate are all different. See [here](references/aaos.md)
+
 ## Running journey tests
 For more information on running journeys, see [here](references/journeys.md)
 
