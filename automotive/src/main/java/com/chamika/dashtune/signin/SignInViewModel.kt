@@ -8,6 +8,10 @@ import androidx.lifecycle.viewModelScope
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.FirebaseUtils
 import com.chamika.dashtune.auth.JellyfinAccountManager
+import com.chamika.dashtune.tls.CertificateInspector
+import com.chamika.dashtune.tls.ServerCertificate
+import com.chamika.dashtune.tls.TrustedCertificateStore
+import com.chamika.dashtune.tls.isCertificateTrustFailure
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -32,6 +36,12 @@ class SignInViewModel @Inject constructor() : ViewModel() {
     @Inject
     lateinit var accountManager: JellyfinAccountManager
 
+    @Inject
+    lateinit var trustedCertificateStore: TrustedCertificateStore
+
+    @Inject
+    lateinit var certificateInspector: CertificateInspector
+
     private var quickConnectSecret: String = ""
 
     private val _loggedIn = MutableLiveData<Boolean>()
@@ -43,20 +53,39 @@ class SignInViewModel @Inject constructor() : ViewModel() {
 
     private var quickConnectJob: kotlinx.coroutines.Job? = null
 
-    suspend fun pingServer(serverUrl: String): Boolean {
+    suspend fun pingServer(serverUrl: String): PingResult {
         return try {
             Log.i(LOG_TAG, "Pinging $serverUrl")
             val response = withContext(Dispatchers.IO) {
                 jellyfin.createApi(serverUrl).systemApi.getPingSystem()
             }
-            response.status == 200
+            if (response.status == 200) PingResult.Success else PingResult.Unreachable
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Error", e)
             val host = try { java.net.URI(serverUrl).host ?: "unknown" } catch (_: Exception) { "invalid_url" }
             FirebaseUtils.safeSetCustomKey("server_url_host", host)
+
+            // A rejected certificate is a state the user can resolve, so offer the prompt instead
+            // of recording it as a crash. Only report it when we can't read the certificate back,
+            // which means something else is wrong.
+            if (isCertificateTrustFailure(e)) {
+                val certificate = certificateInspector.inspect(serverUrl)
+                if (certificate != null) {
+                    FirebaseUtils.safeLog("Untrusted certificate presented by $host")
+                    return PingResult.UntrustedCertificate(certificate)
+                }
+            }
+
             FirebaseUtils.safeRecordException(e)
-            false
+            PingResult.Unreachable
         }
+    }
+
+    /** Accept [certificate] for its host, so every later connection to it succeeds. */
+    fun trustCertificate(certificate: ServerCertificate) {
+        Log.i(LOG_TAG, "Trusting certificate ${certificate.fingerprintSha256} for ${certificate.host}")
+        FirebaseUtils.safeLog("User trusted a certificate manually")
+        trustedCertificateStore.pin(certificate.host, certificate.certificate)
     }
 
     fun startQuickConnect(serverUrl: String) {
@@ -165,4 +194,11 @@ class SignInViewModel @Inject constructor() : ViewModel() {
     companion object {
         internal const val JELLYFIN_SERVER_URL = "jellyfinServer"
     }
+}
+
+/** Outcome of reaching a server, separating a rejected certificate from a plain network failure. */
+sealed interface PingResult {
+    data object Success : PingResult
+    data object Unreachable : PingResult
+    data class UntrustedCertificate(val certificate: ServerCertificate) : PingResult
 }

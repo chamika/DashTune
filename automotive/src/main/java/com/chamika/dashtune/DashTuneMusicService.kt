@@ -22,7 +22,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.NoOpCacheEvictor
@@ -160,6 +160,9 @@ class DashTuneMusicService : MediaLibraryService() {
     @Inject
     lateinit var mediaCacheDao: MediaCacheDao
 
+    @Inject
+    lateinit var okHttpClient: okhttp3.OkHttpClient
+
     private lateinit var accountManager: com.chamika.dashtune.auth.JellyfinAccountManager
     private lateinit var jellyfinApi: ApiClient
     private lateinit var mediaSourceFactory: DefaultMediaSourceFactory
@@ -195,7 +198,7 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var downloadCache: SimpleCache
     private lateinit var downloadManager: DownloadManager
     private lateinit var cacheDataSourceFactory: CacheDataSource.Factory
-    private lateinit var httpDataSourceFactory: DefaultHttpDataSource.Factory
+    private lateinit var httpDataSourceFactory: OkHttpDataSource.Factory
 
     override fun onCreate() {
         super.onCreate()
@@ -230,7 +233,10 @@ class DashTuneMusicService : MediaLibraryService() {
             databaseProvider
         )
 
-        httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        // OkHttp rather than the default HttpURLConnection stack so streaming, buffering and
+        // prefetch go through the same TLS configuration as the API calls — including any
+        // certificate the user approved at sign-in.
+        httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
         cacheDataSourceFactory = CacheDataSource.Factory()
             .setCache(downloadCache)
             .setUpstreamDataSourceFactory(httpDataSourceFactory)
