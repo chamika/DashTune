@@ -42,6 +42,15 @@
     <string name="sync_library_never">Never synced</string>
     <string name="sync_library_last_synced">Last synced: %s</string>
     <string name="sync_failed">Sync failed</string>
+    <string name="clear_cache">Clear library cache</string>
+    <string name="clear_cache_summary">Removes cached library data and artwork. Downloaded music is kept.</string>
+    <string name="clear_cache_confirmation">Clear the cached library? It will be re-fetched from your server.</string>
+    <string name="clear_cache_confirm">Clear</string>
+    <string name="cache_cleared">Library cache cleared</string>
+    <string name="force_exit">Force exit</string>
+    <string name="force_exit_summary">Stops playback and shuts down DashTune. Reopen it from the media apps list.</string>
+    <string name="force_exit_confirmation">Force exit DashTune? Playback stops and the app closes. Reopen it from the media apps list.</string>
+    <string name="force_exit_confirm">Force exit</string>
     <string name="retry">Retry</string>
     <string name="library_unavailable">Library unavailable. Check your connection and retry.</string>
 </resources>

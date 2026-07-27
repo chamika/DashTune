@@ -75,6 +75,36 @@ class SettingsFragment : PreferenceFragmentCompat() {
             true
         }
 
+        val clearCachePref = findPreference<Preference>("clear_cache")
+        clearCachePref?.setOnPreferenceClickListener {
+            AlertDialog.Builder(requireContext())
+                .setMessage(R.string.clear_cache_confirmation)
+                .setPositiveButton(R.string.clear_cache_confirm) { _, _ ->
+                    clearCachePref.isEnabled = false
+                    lifecycleScope.launch {
+                        viewModel.clearCache()
+                        syncPref?.summary = lastSyncSummary()
+                        Toast.makeText(requireContext(), R.string.cache_cleared, Toast.LENGTH_SHORT).show()
+                        clearCachePref.isEnabled = true
+                    }
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+            true
+        }
+
+        findPreference<Preference>("force_exit")?.setOnPreferenceClickListener {
+            AlertDialog.Builder(requireContext())
+                .setMessage(R.string.force_exit_confirmation)
+                .setPositiveButton(R.string.force_exit_confirm) { _, _ ->
+                    viewModel.forceExit()
+                    requireActivity().finishAffinity()
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+            true
+        }
+
         findPreference<Preference>("sign_out")?.setOnPreferenceClickListener {
             AlertDialog.Builder(requireContext())
                 .setMessage(R.string.sign_out_confirmation)

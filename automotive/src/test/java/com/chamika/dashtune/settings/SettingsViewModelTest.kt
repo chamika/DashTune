@@ -142,4 +142,70 @@ class SettingsViewModelTest {
 
         verify { accountManager.logout() }
     }
+
+    // --- forceExit ---
+
+    @Test
+    fun `forceExit sends ACTION_FORCE_EXIT intent to DashTuneMusicService`() {
+        val intentSlot = slot<Intent>()
+        every { context.startService(capture(intentSlot)) } returns null
+
+        viewModel.forceExit()
+
+        assertEquals(DashTuneMusicService.ACTION_FORCE_EXIT, intentSlot.captured.action)
+        assertEquals(
+            DashTuneMusicService::class.java.name,
+            intentSlot.captured.component?.className
+        )
+    }
+
+    // --- clearCache ---
+
+    @Test
+    fun `clearCache calls mediaCacheDao deleteAll`() = runTest {
+        viewModel.clearCache()
+
+        coVerify { mediaCacheDao.deleteAll() }
+    }
+
+    @Test
+    fun `clearCache removes last_sync_timestamp from shared preferences`() = runTest {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        prefs.edit().putLong("last_sync_timestamp", 999L).apply()
+
+        viewModel.clearCache()
+
+        assertEquals(-1L, prefs.getLong("last_sync_timestamp", -1L))
+    }
+
+    @Test
+    fun `clearCache sends ACTION_REFRESH_LIBRARY intent to DashTuneMusicService`() = runTest {
+        val intentSlot = slot<Intent>()
+        every { context.startService(capture(intentSlot)) } returns null
+
+        viewModel.clearCache()
+
+        assertEquals(DashTuneMusicService.ACTION_REFRESH_LIBRARY, intentSlot.captured.action)
+        assertEquals(
+            DashTuneMusicService::class.java.name,
+            intentSlot.captured.component?.className
+        )
+    }
+
+    @Test
+    fun `clearCache does not remove playlistIds from shared preferences`() = runTest {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        prefs.edit().putString("playlistIds", "id1,id2").apply()
+
+        viewModel.clearCache()
+
+        assertEquals("id1,id2", prefs.getString("playlistIds", null))
+    }
+
+    @Test
+    fun `clearCache does not call accountManager logout`() = runTest {
+        viewModel.clearCache()
+
+        verify(exactly = 0) { accountManager.logout() }
+    }
 }
