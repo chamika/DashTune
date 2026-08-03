@@ -19,14 +19,19 @@ import com.chamika.dashtune.DashTuneMusicService
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.SYNC_COMMAND
 import com.chamika.dashtune.R
 import com.chamika.dashtune.signin.SignInActivity
+import com.chamika.dashtune.tls.TrustedCertificateStore
 import com.google.common.util.concurrent.ListenableFuture
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class SettingsFragment : PreferenceFragmentCompat() {
+
+    @Inject
+    lateinit var trustedCertificateStore: TrustedCertificateStore
 
     private lateinit var viewModel: SettingsViewModel
     private lateinit var controllerFuture: ListenableFuture<MediaController>
@@ -93,6 +98,15 @@ class SettingsFragment : PreferenceFragmentCompat() {
             true
         }
 
+        val trustedCertsPref = findPreference<Preference>("trusted_certificates")
+        trustedCertsPref?.let { pref ->
+            refreshTrustedCertificates(pref)
+            pref.setOnPreferenceClickListener {
+                showTrustedCertificates(pref)
+                true
+            }
+        }
+
         findPreference<Preference>("force_exit")?.setOnPreferenceClickListener {
             AlertDialog.Builder(requireContext())
                 .setMessage(R.string.force_exit_confirmation)
@@ -134,6 +148,47 @@ class SettingsFragment : PreferenceFragmentCompat() {
     override fun onStop() {
         MediaController.releaseFuture(controllerFuture)
         super.onStop()
+    }
+
+    private fun refreshTrustedCertificates(pref: Preference) {
+        val count = trustedCertificateStore.pinnedCertificates().size
+        pref.summary = if (count == 0) {
+            getString(R.string.trusted_certificates_none)
+        } else {
+            getString(R.string.trusted_certificates_count, count)
+        }
+        pref.isEnabled = count > 0
+    }
+
+    /** Lists approved certificates so a user can withdraw trust without signing out. */
+    private fun showTrustedCertificates(pref: Preference) {
+        val pinned = trustedCertificateStore.pinnedCertificates().toList()
+        if (pinned.isEmpty()) return
+
+        val labels = pinned.map { (host, fingerprints) ->
+            "$host\n${fingerprints.joinToString("\n")}"
+        }.toTypedArray()
+
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.trusted_certificates)
+            .setItems(labels) { _, index ->
+                val host = pinned[index].first
+                AlertDialog.Builder(requireContext())
+                    .setMessage(getString(R.string.trusted_certificate_remove_confirmation, host))
+                    .setPositiveButton(R.string.trusted_certificate_remove_confirm) { _, _ ->
+                        trustedCertificateStore.remove(host)
+                        refreshTrustedCertificates(pref)
+                        Toast.makeText(
+                            requireContext(),
+                            R.string.trusted_certificate_removed,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun lastSyncSummary(): String {

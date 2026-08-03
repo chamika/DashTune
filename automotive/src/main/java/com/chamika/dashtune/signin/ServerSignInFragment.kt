@@ -1,5 +1,6 @@
 package com.chamika.dashtune.signin
 
+import android.app.AlertDialog
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextUtils
@@ -15,7 +16,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import com.chamika.dashtune.R
 import com.chamika.dashtune.signin.SignInViewModel.Companion.JELLYFIN_SERVER_URL
+import com.chamika.dashtune.tls.ServerCertificate
 import kotlinx.coroutines.launch
+import java.text.DateFormat
 
 class ServerSignInFragment : Fragment() {
 
@@ -45,22 +48,59 @@ class ServerSignInFragment : Fragment() {
         submitServer.setOnClickListener {
             val serverUrl = serverInput.text
             if (!TextUtils.isEmpty(serverUrl)) {
-                progressBar.visibility = View.VISIBLE
-                errorText.visibility = View.GONE
+                connect(serverUrl)
+            }
+        }
+    }
 
-                viewLifecycleOwner.lifecycleScope.launch {
-                    val pingServer = viewModel.pingServer(serverUrl.toString())
+    private fun connect(serverUrl: Editable) {
+        progressBar.visibility = View.VISIBLE
+        errorText.visibility = View.GONE
 
-                    if (pingServer) {
-                        signInToServer(serverUrl)
-                    } else {
-                        progressBar.visibility = View.INVISIBLE
-                        errorText.setText(R.string.server_unreachable)
-                        errorText.visibility = View.VISIBLE
-                    }
+        viewLifecycleOwner.lifecycleScope.launch {
+            when (val result = viewModel.pingServer(serverUrl.toString())) {
+                is PingResult.Success -> signInToServer(serverUrl)
+
+                is PingResult.UntrustedCertificate -> {
+                    progressBar.visibility = View.INVISIBLE
+                    promptToTrust(result.certificate, serverUrl)
+                }
+
+                is PingResult.Unreachable -> {
+                    progressBar.visibility = View.INVISIBLE
+                    errorText.setText(R.string.server_unreachable)
+                    errorText.visibility = View.VISIBLE
                 }
             }
         }
+    }
+
+    /**
+     * Show what the server presented and let the user decide. The fingerprint is the part worth
+     * checking against the server, so it gets its own line rather than being buried in the subject.
+     */
+    private fun promptToTrust(certificate: ServerCertificate, serverUrl: Editable) {
+        val expiry = DateFormat.getDateInstance(DateFormat.MEDIUM).format(certificate.notAfter)
+        val details = getString(
+            R.string.untrusted_certificate_details,
+            certificate.host,
+            certificate.issuer,
+            expiry,
+            certificate.fingerprintSha256,
+        )
+
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.untrusted_certificate_title)
+            .setMessage(details)
+            .setPositiveButton(R.string.untrusted_certificate_trust) { _, _ ->
+                viewModel.trustCertificate(certificate)
+                connect(serverUrl)
+            }
+            .setNegativeButton(R.string.cancel) { _, _ ->
+                errorText.setText(R.string.untrusted_certificate_rejected)
+                errorText.visibility = View.VISIBLE
+            }
+            .show()
     }
 
     private fun signInToServer(serverUrl: Editable) {

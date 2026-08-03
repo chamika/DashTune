@@ -2,6 +2,9 @@ package com.chamika.dashtune.signin
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
 import com.chamika.dashtune.auth.JellyfinAccountManager
+import com.chamika.dashtune.tls.CertificateInspector
+import com.chamika.dashtune.tls.ServerCertificate
+import com.chamika.dashtune.tls.TrustedCertificateStore
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import io.mockk.every
 import io.mockk.mockk
@@ -29,6 +32,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import io.mockk.coEvery
+import javax.net.ssl.SSLHandshakeException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -43,6 +47,8 @@ class SignInViewModelTest {
     private lateinit var accountManager: JellyfinAccountManager
     private lateinit var apiClient: ApiClient
     private lateinit var systemApi: SystemApi
+    private lateinit var trustedCertificateStore: TrustedCertificateStore
+    private lateinit var certificateInspector: CertificateInspector
     private lateinit var viewModel: SignInViewModel
 
     @Before
@@ -65,9 +71,14 @@ class SignInViewModelTest {
         mockkStatic("org.jellyfin.sdk.api.client.extensions.ApiClientExtensionsKt")
         every { any<ApiClient>().systemApi } returns systemApi
 
+        trustedCertificateStore = mockk(relaxed = true)
+        certificateInspector = mockk(relaxed = true)
+
         viewModel = SignInViewModel()
         viewModel.jellyfin = jellyfin
         viewModel.accountManager = accountManager
+        viewModel.trustedCertificateStore = trustedCertificateStore
+        viewModel.certificateInspector = certificateInspector
     }
 
     @After
@@ -85,32 +96,69 @@ class SignInViewModelTest {
     // --- pingServer ---
 
     @Test
-    fun `pingServer returns true when server responds with status 200`() = runTest {
+    fun `pingServer succeeds when server responds with status 200`() = runTest {
         val pingResponse: Response<String> = mockk { every { status } returns 200 }
         coEvery { systemApi.getPingSystem() } returns pingResponse
 
         val result = viewModel.pingServer("http://jellyfin.local:8096")
 
-        assertTrue(result)
+        assertEquals(PingResult.Success, result)
     }
 
     @Test
-    fun `pingServer returns false when server responds with non-200 status`() = runTest {
+    fun `pingServer is unreachable when server responds with non-200 status`() = runTest {
         val pingResponse: Response<String> = mockk { every { status } returns 503 }
         coEvery { systemApi.getPingSystem() } returns pingResponse
 
         val result = viewModel.pingServer("http://jellyfin.local:8096")
 
-        assertFalse(result)
+        assertEquals(PingResult.Unreachable, result)
     }
 
     @Test
-    fun `pingServer returns false when network exception is thrown`() = runTest {
+    fun `pingServer is unreachable when network exception is thrown`() = runTest {
         coEvery { systemApi.getPingSystem() } throws RuntimeException("connection refused")
 
         val result = viewModel.pingServer("http://unreachable.host")
 
-        assertFalse(result)
+        assertEquals(PingResult.Unreachable, result)
+    }
+
+    @Test
+    fun `pingServer reports the certificate when the server presents an untrusted one`() = runTest {
+        val certificate: ServerCertificate = mockk(relaxed = true)
+        coEvery { systemApi.getPingSystem() } throws
+                SSLHandshakeException("Trust anchor for certification path not found.")
+        coEvery { certificateInspector.inspect(any()) } returns certificate
+
+        val result = viewModel.pingServer("https://jellyfin.local:8920")
+
+        assertEquals(PingResult.UntrustedCertificate(certificate), result)
+    }
+
+    @Test
+    fun `pingServer is unreachable when the untrusted certificate cannot be read back`() = runTest {
+        coEvery { systemApi.getPingSystem() } throws
+                SSLHandshakeException("Trust anchor for certification path not found.")
+        coEvery { certificateInspector.inspect(any()) } returns null
+
+        val result = viewModel.pingServer("https://jellyfin.local:8920")
+
+        assertEquals(PingResult.Unreachable, result)
+    }
+
+    @Test
+    fun `trustCertificate pins the certificate for its host`() {
+        val x509 = mockk<java.security.cert.X509Certificate>()
+        val certificate: ServerCertificate = mockk {
+            every { host } returns "jellyfin.local"
+            every { this@mockk.certificate } returns x509
+            every { fingerprintSha256 } returns "AA:BB"
+        }
+
+        viewModel.trustCertificate(certificate)
+
+        verify { trustedCertificateStore.pin("jellyfin.local", x509) }
     }
 
     // --- login ---

@@ -8,6 +8,10 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.chamika.dashtune.Constants.LOG_TAG
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okio.buffer
@@ -20,10 +24,27 @@ import java.util.concurrent.TimeUnit
 
 class AlbumArtContentProvider : ContentProvider() {
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
+    /**
+     * Hilt can't inject a ContentProvider (providers are created before the Application is fully
+     * initialised), so the shared client is pulled from the entry point instead. It's resolved
+     * lazily on the first artwork request — long after startup — and reuses the app-wide TLS
+     * configuration so pinned certificates apply to album art too.
+     */
+    private val client: OkHttpClient by lazy {
+        EntryPointAccessors
+            .fromApplication(context!!.applicationContext, AlbumArtEntryPoint::class.java)
+            .okHttpClient()
+            .newBuilder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .build()
+    }
+
+    @EntryPoint
+    @InstallIn(SingletonComponent::class)
+    interface AlbumArtEntryPoint {
+        fun okHttpClient(): OkHttpClient
+    }
 
     companion object {
         // Written from the media session/browse threads and read from binder threads,

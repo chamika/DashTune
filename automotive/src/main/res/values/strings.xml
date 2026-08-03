@@ -51,6 +51,17 @@
     <string name="force_exit_summary">Stops playback and shuts down DashTune. Reopen it from the media apps list.</string>
     <string name="force_exit_confirmation">Force exit DashTune? Playback stops and the app closes. Reopen it from the media apps list.</string>
     <string name="force_exit_confirm">Force exit</string>
+    <string name="untrusted_certificate_title">Certificate not trusted</string>
+    <string name="untrusted_certificate_details">Android does not trust the certificate for %1$s.\n\nIssued by: %2$s\nExpires: %3$s\n\nSHA-256 fingerprint:\n%4$s\n\nOnly continue if this fingerprint matches your server. Trusting the wrong certificate lets someone intercept your login and music.</string>
+    <string name="untrusted_certificate_trust">Trust this certificate</string>
+    <string name="untrusted_certificate_rejected">Certificate not trusted. Connection cancelled.</string>
+    <string name="trusted_certificates">Trusted certificates</string>
+    <string name="trusted_certificates_none">No manually trusted certificates</string>
+    <string name="trusted_certificates_count">%d manually trusted</string>
+    <string name="trusted_certificates_summary">Certificates you approved during sign-in</string>
+    <string name="trusted_certificate_remove_confirmation">Stop trusting the certificate for %s? You will need to approve it again to reconnect.</string>
+    <string name="trusted_certificate_remove_confirm">Stop trusting</string>
+    <string name="trusted_certificate_removed">Certificate removed</string>
     <string name="retry">Retry</string>
     <string name="library_unavailable">Library unavailable. Check your connection and retry.</string>
 </resources>

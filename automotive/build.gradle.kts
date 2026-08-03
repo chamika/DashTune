@@ -14,8 +14,8 @@ android {
         applicationId = "com.chamika.dashtune"
         minSdk = 28
         targetSdk = 36
-        versionCode = 27
-        versionName = "1.3.1"
+        versionCode = 28
+        versionName = "1.3.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -74,6 +74,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.datasource.okhttp)
     implementation(libs.jellyfin.core)
     implementation(libs.slf4j.android)
     implementation(libs.okhttp)
