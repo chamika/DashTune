@@ -8,6 +8,9 @@ import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ARTISTS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import io.mockk.coEvery
@@ -390,6 +393,96 @@ class MediaRepositoryTest {
         val result = repository.getContentParentId("track-1")
 
         assertEquals("album-1", result)
+    }
+
+    @Test
+    fun `getContentParentId filters out the new category IDs`() = runTest {
+        coEvery { dao.getParentIds("album-1") } returns listOf(ARTISTS, ALBUMS, GENRES)
+
+        assertNull(repository.getContentParentId("album-1"))
+    }
+
+    @Test
+    fun `getContentParentId filters out letter buckets`() = runTest {
+        // A bucket is browse scaffolding, not a container of playable siblings.
+        coEvery { dao.getParentIds("album-1") } returns listOf(
+            MediaItemFactory.letterBucketId(ALBUMS, "A")
+        )
+
+        assertNull(repository.getContentParentId("album-1"))
+    }
+
+    @Test
+    fun `getContentParentId still returns a real parent alongside a letter bucket`() = runTest {
+        coEvery { dao.getParentIds("track-1") } returns listOf(
+            MediaItemFactory.letterBucketId(ALBUMS, "A"),
+            "album-1"
+        )
+
+        assertEquals("album-1", repository.getContentParentId("track-1"))
+    }
+
+    // --- new category getItem tests ---
+
+    @Test
+    fun `getItem for the new category IDs delegates to tree`() = runTest {
+        listOf(ARTISTS, ALBUMS, GENRES).forEach { id ->
+            coEvery { dao.getItem(id) } returns null
+            coEvery { tree.getItem(id) } returns MediaItem.Builder().setMediaId(id).build()
+
+            assertEquals(id, repository.getItem(id).mediaId)
+        }
+    }
+
+    // --- getShuffledGenreTracks tests ---
+
+    @Test
+    fun `getShuffledGenreTracks delegates to tree`() = runTest {
+        val shuffled = listOf(MediaItem.Builder().setMediaId("track-1").build())
+        coEvery { tree.getShuffledGenreTracks("genre-1") } returns shuffled
+
+        assertEquals(shuffled, repository.getShuffledGenreTracks("genre-1"))
+    }
+
+    @Test
+    fun `getShuffledGenreTracks falls back to cached descendants when tree throws`() = runTest {
+        coEvery { tree.getShuffledGenreTracks("genre-1") } throws RuntimeException("Offline")
+        coEvery { dao.getChildrenByParent("genre-1") } returns listOf(
+            CachedMediaItemEntity(
+                mediaId = "album-1",
+                parentId = "genre-1",
+                title = "Nevermind",
+                subtitle = null,
+                artUri = null,
+                mediaType = MediaMetadata.MEDIA_TYPE_ALBUM,
+                isPlayable = true,
+                isBrowsable = true,
+                sortOrder = 0,
+                durationMs = null,
+                isFavorite = false,
+                extras = null
+            )
+        )
+        coEvery { dao.getChildrenByParent("album-1") } returns listOf(
+            CachedMediaItemEntity(
+                mediaId = "track-1",
+                parentId = "album-1",
+                title = "Lithium",
+                subtitle = null,
+                artUri = null,
+                mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+                isPlayable = true,
+                isBrowsable = false,
+                sortOrder = 0,
+                durationMs = null,
+                isFavorite = false,
+                extras = null
+            )
+        )
+
+        val result = repository.getShuffledGenreTracks("genre-1")
+
+        assertEquals(listOf("track-1"), result.map { it.mediaId })
     }
 
     // --- getChildren for ROOT_ID tests ---

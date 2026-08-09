@@ -5,20 +5,27 @@ import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_ARTIST
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS
+import androidx.media3.common.MediaMetadata.MEDIA_TYPE_GENRE
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_PLAYLIST
 import androidx.preference.PreferenceManager
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.R
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ARTISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_FOLDER_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTERS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTER_BUCKET_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
 import com.google.common.cache.Cache
 import com.google.common.cache.CacheBuilder
 import kotlinx.coroutines.CancellationException
@@ -26,6 +33,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.artistsApi
+import org.jellyfin.sdk.api.client.extensions.genresApi
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.api.client.extensions.userViewsApi
@@ -67,7 +75,12 @@ class JellyfinMediaTree(
             "books" to BOOKS,
             "playlists" to PLAYLISTS,
             "random" to RANDOM_ALBUMS,
-            "folders" to FOLDERS
+            "folders" to FOLDERS,
+            // Appended rather than slotted in alphabetically so existing users'
+            // root tab order doesn't shift when they upgrade.
+            "artists" to ARTISTS,
+            "albums" to ALBUMS,
+            "genres" to GENRES
         )
         val validKeys = canonicalOrder.map { it.first }.toSet()
         val validSelected = selected.intersect(validKeys)
@@ -117,8 +130,18 @@ class JellyfinMediaTree(
                 id == PLAYLISTS -> itemFactory.playlists()
                 id == BOOKS -> itemFactory.books()
                 id == FOLDERS -> itemFactory.folders()
+                id == ARTISTS -> itemFactory.artists()
+                id == ALBUMS -> itemFactory.albums()
+                id == GENRES -> itemFactory.genres()
                 id.startsWith(SHUFFLE_FOLDER_PREFIX) ->
                     itemFactory.shuffleAll(id.removePrefix(SHUFFLE_FOLDER_PREFIX))
+                id.startsWith(SHUFFLE_GENRE_PREFIX) ->
+                    itemFactory.shuffleGenre(id.removePrefix(SHUFFLE_GENRE_PREFIX))
+                id.startsWith(LETTER_BUCKET_PREFIX) -> {
+                    val (categoryId, letter) = MediaItemFactory.parseLetterBucketId(id)
+                        ?: throw UnsupportedOperationException("Malformed letter bucket id: $id")
+                    itemFactory.letterBucket(categoryId, letter)
+                }
                 else -> retryOnFailure {
                     val response = api.userLibraryApi.getItem(id.toUUID())
                     val dto = response.content
@@ -147,15 +170,140 @@ class JellyfinMediaTree(
     }
 
     suspend fun getChildren(id: String): List<MediaItem> {
-        return when (id) {
-            ROOT_ID -> getActiveCategoryIds().map { getItem(it) }
-            LATEST_ALBUMS -> getLatestAlbums()
-            RANDOM_ALBUMS -> getRandomAlbums()
-            FAVOURITES -> getFavourite()
-            PLAYLISTS -> getPlaylists()
-            BOOKS -> getBooks()
-            FOLDERS -> getFolders()
+        return when {
+            id == ROOT_ID -> getActiveCategoryIds().map { getItem(it) }
+            id == LATEST_ALBUMS -> getLatestAlbums()
+            id == RANDOM_ALBUMS -> getRandomAlbums()
+            id == FAVOURITES -> getFavourite()
+            id == PLAYLISTS -> getPlaylists()
+            id == BOOKS -> getBooks()
+            id == FOLDERS -> getFolders()
+            id == ARTISTS || id == ALBUMS -> getLetterBuckets(id)
+            id == GENRES -> getGenres()
+            id.startsWith(LETTER_BUCKET_PREFIX) -> getLetterBucketChildren(id)
             else -> getItemChildren(id)
+        }
+    }
+
+    /**
+     * The full A–Z index is always shown. Probing each letter for emptiness would cost 27
+     * round trips every time the category is opened, which is the wrong trade on a car's
+     * connection — an occasional empty letter is cheaper than that latency.
+     */
+    private fun getLetterBuckets(categoryId: String): List<MediaItem> = LETTERS.map { letter ->
+        val item = itemFactory.letterBucket(categoryId, letter)
+        mediaItems.put(item.mediaId, item)
+        item
+    }
+
+    private suspend fun getLetterBucketChildren(bucketId: String): List<MediaItem> {
+        val (categoryId, letter) = MediaItemFactory.parseLetterBucketId(bucketId) ?: run {
+            Log.w(LOG_TAG, "Malformed letter bucket id: $bucketId")
+            return emptyList()
+        }
+
+        // Jellyfin has no "starts with a non-letter" filter, but names sorting before "A"
+        // are exactly the digits and symbols the "#" bucket is meant to collect.
+        val startsWith = if (letter == "#") null else letter
+        val lessThan = if (letter == "#") "A" else null
+
+        return retryOnFailure {
+            val items = if (categoryId == ARTISTS) {
+                api.artistsApi.getAlbumArtists(
+                    nameStartsWith = startsWith,
+                    nameLessThan = lessThan,
+                    sortBy = listOf(ItemSortBy.SORT_NAME),
+                    sortOrder = listOf(SortOrder.ASCENDING),
+                    limit = MAX_ITEMS
+                ).content.items
+            } else {
+                api.itemsApi.getItems(
+                    includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
+                    recursive = true,
+                    nameStartsWith = startsWith,
+                    nameLessThan = lessThan,
+                    sortBy = listOf(ItemSortBy.SORT_NAME),
+                    sortOrder = listOf(SortOrder.ASCENDING),
+                    limit = MAX_ITEMS
+                ).content.items
+            }
+
+            items.mapNotNull {
+                try {
+                    val item = itemFactory.create(it)
+                    mediaItems.put(item.mediaId, item)
+                    item
+                } catch (e: UnsupportedOperationException) {
+                    Log.w(LOG_TAG, "Skipping unsupported item type in $categoryId: ${it.type}")
+                    null
+                }
+            }
+        }
+    }
+
+    private suspend fun getGenres(): List<MediaItem> = retryOnFailure {
+        val response = api.genresApi.getGenres(
+            includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
+            sortBy = listOf(ItemSortBy.SORT_NAME),
+            sortOrder = listOf(SortOrder.ASCENDING),
+            limit = MAX_ITEMS
+        )
+
+        response.content.items.mapNotNull {
+            try {
+                val item = itemFactory.create(it)
+                mediaItems.put(item.mediaId, item)
+                item
+            } catch (e: UnsupportedOperationException) {
+                Log.w(LOG_TAG, "Skipping unsupported item type in genres: ${it.type}")
+                null
+            }
+        }
+    }
+
+    private suspend fun getGenreAlbums(genreId: String): List<MediaItem> {
+        val albums = retryOnFailure {
+            val response = api.itemsApi.getItems(
+                includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
+                recursive = true,
+                genreIds = listOf(genreId.toUUID()),
+                sortBy = listOf(ItemSortBy.SORT_NAME),
+                sortOrder = listOf(SortOrder.ASCENDING),
+                limit = MAX_ITEMS
+            )
+
+            response.content.items.map {
+                val item = itemFactory.create(it)
+                mediaItems.put(item.mediaId, item)
+                item
+            }
+        }
+
+        if (albums.isEmpty()) return albums
+
+        val shuffle = itemFactory.shuffleGenre(genreId)
+        mediaItems.put(shuffle.mediaId, shuffle)
+        return listOf(shuffle) + albums
+    }
+
+    suspend fun getShuffledGenreTracks(genreId: String): List<MediaItem> = retryOnFailure {
+        val response = api.itemsApi.getItems(
+            genreIds = listOf(genreId.toUUID()),
+            recursive = true,
+            includeItemTypes = listOf(BaseItemKind.AUDIO),
+            sortBy = listOf(ItemSortBy.RANDOM),
+            limit = SHUFFLE_MAX_ITEMS
+        )
+
+        response.content.items.mapNotNull {
+            try {
+                val item = itemFactory.create(it)
+                mediaItems.put(item.mediaId, item)
+                item
+            } catch (e: UnsupportedOperationException) {
+                Log.w(LOG_TAG, "Skipping unsupported item type in genre shuffle: ${it.type}")
+                null
+            }
         }
     }
 
@@ -255,6 +403,12 @@ class JellyfinMediaTree(
     private suspend fun getItemChildren(id: String): List<MediaItem> {
         val parentItem = getItem(id)
         val isFolderBrowse = parentItem.mediaMetadata.extras?.getBoolean(IS_FOLDER_KEY) == true
+
+        // A genre has no parentId relationship to its albums — they're linked by genreIds —
+        // so the generic children query below would come back empty.
+        if (parentItem.mediaMetadata.mediaType == MEDIA_TYPE_GENRE) {
+            return getGenreAlbums(id)
+        }
 
         // Jellyfin's music library organizes content by Artist/Album metadata rather than
         // raw filesystem folders, so nested folders can come back typed as MUSIC_ARTIST.
