@@ -31,6 +31,15 @@
     <string name="cancel">Cancel</string>
     <string name="books">Books</string>
     <string name="folders">Folders</string>
+    <string name="favourites">Favourites</string>
+    <string name="downloads">Downloads</string>
+    <string name="download_for_offline">Download for offline</string>
+    <string name="remove_download">Remove download</string>
+    <string name="download_started">Downloading for offline</string>
+    <string name="download_removed">Download removed</string>
+    <string name="download_failed">Couldn\'t download for offline</string>
+    <string name="downloads_storage">Downloads storage</string>
+    <string name="downloads_storage_summary">%s used by offline downloads</string>
     <string name="shuffle_all">Shuffle all</string>
     <string name="browse_categories">Browse categories</string>
     <string name="browse_categories_summary">Choose which categories appear (2–4)</string>

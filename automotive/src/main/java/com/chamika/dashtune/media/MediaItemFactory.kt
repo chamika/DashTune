@@ -12,6 +12,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaConstants
 import androidx.preference.PreferenceManager
 import com.chamika.dashtune.AlbumArtContentProvider
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.DOWNLOAD_COMMAND
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.REMOVE_DOWNLOAD_COMMAND
 import com.chamika.dashtune.R
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.universalAudioApi
@@ -37,6 +39,7 @@ class MediaItemFactory(
         const val PLAYLISTS = "PLAYLISTS_ID"
         const val BOOKS = "BOOKS_ID"
         const val FOLDERS = "FOLDERS_ID"
+        const val DOWNLOADS = "DOWNLOADS_ID"
         const val SHUFFLE_FOLDER_PREFIX = "SHUFFLE_FOLDER:"
         const val PARENT_KEY = "PARENT_KEY"
         const val IS_AUDIOBOOK_KEY = "is_audiobook"
@@ -145,6 +148,84 @@ class MediaItemFactory(
             .build()
     }
 
+    fun downloads(): MediaItem {
+        val extras = Bundle()
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+        )
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(context.getString(R.string.downloads))
+            .setIsBrowsable(true)
+            .setIsPlayable(false)
+            .setArtworkUri("android.resource://com.chamika.dashtune/drawable/ic_download".toUri())
+            .setExtras(extras)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(DOWNLOADS)
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    /**
+     * A row under the Downloads node for a pinned container. Carries the "remove download" browse
+     * action instead of "download for offline". Folder-typed containers (e.g. the Favourites
+     * pseudo-container) are browsable; albums and playlists stay playable so tapping plays them.
+     */
+    fun downloadedContainer(
+        id: String,
+        title: String,
+        subtitle: String?,
+        artUri: String?,
+        mediaType: Int
+    ): MediaItem {
+        val isFolder = mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_MIXED ||
+            mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS ||
+            mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS
+
+        val metadataBuilder = MediaMetadata.Builder()
+            .setTitle(title)
+            .setAlbumArtist(subtitle)
+            .setIsBrowsable(isFolder)
+            .setIsPlayable(!isFolder)
+            .setMediaType(mediaType)
+            .setSupportedCommands(listOf(REMOVE_DOWNLOAD_COMMAND))
+
+        artworkUriFor(id, artUri)?.let { metadataBuilder.setArtworkUri(it) }
+
+        return MediaItem.Builder()
+            .setMediaId(id)
+            .setMediaMetadata(metadataBuilder.build())
+            .build()
+    }
+
+    /**
+     * Resolves a persisted artwork string (an original http(s) URL or an app URI) back to a
+     * displayable Uri, falling back to the item's own primary image when nothing was stored.
+     */
+    private fun artworkUriFor(id: String, storedArtUri: String?): Uri? {
+        if (storedArtUri != null) {
+            val uri = storedArtUri.toUri()
+            return if (uri.scheme == "http" || uri.scheme == "https") {
+                AlbumArtContentProvider.mapUri(uri)
+            } else {
+                uri
+            }
+        }
+        return try {
+            artUri(id.toUUID())
+        } catch (e: IllegalArgumentException) {
+            null
+        }
+    }
+
     private fun albumCategory(id: String, label: String, icon: String): MediaItem {
         val extras = Bundle()
         extras.putInt(
@@ -219,6 +300,7 @@ class MediaItemFactory(
             .setArtworkUri(artUri(item.id))
             .setMediaType(MediaMetadata.MEDIA_TYPE_ALBUM)
             .setExtras(extras)
+            .setSupportedCommands(listOf(DOWNLOAD_COMMAND))
             .build()
 
         return MediaItem.Builder()
@@ -240,6 +322,7 @@ class MediaItemFactory(
             .setArtworkUri(artUri(item.id))
             .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
             .setExtras(extras)
+            .setSupportedCommands(listOf(DOWNLOAD_COMMAND))
             .build()
 
         return MediaItem.Builder()
@@ -275,6 +358,7 @@ class MediaItemFactory(
             .setArtworkUri(artUri(item.id))
             .setMediaType(MediaMetadata.MEDIA_TYPE_ALBUM)
             .setExtras(extras)
+            .setSupportedCommands(listOf(DOWNLOAD_COMMAND))
             .build()
 
         val audioStream = streamingUri(item.id.toString())

@@ -42,6 +42,13 @@ class SettingsFragment : PreferenceFragmentCompat() {
         viewModel = ViewModelProvider(this)[SettingsViewModel::class.java]
         findPreference<Preference>("version")?.summary = viewModel.versionString()
 
+        val downloadsStoragePref = findPreference<Preference>("downloads_storage")
+        downloadsStoragePref?.let { pref ->
+            lifecycleScope.launch {
+                pref.summary = getString(R.string.downloads_storage_summary, viewModel.downloadsStorageString())
+            }
+        }
+
         findPreference<MultiSelectListPreference>("browse_categories")?.setOnPreferenceChangeListener { _, newValue ->
             @Suppress("UNCHECKED_CAST")
             val selected = newValue as? Set<String> ?: return@setOnPreferenceChangeListener false

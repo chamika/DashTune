@@ -11,10 +11,13 @@ import androidx.media3.common.MediaMetadata.MEDIA_TYPE_MUSIC
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_PLAYLIST
 import com.chamika.dashtune.AlbumArtContentProvider
 import com.chamika.dashtune.Constants.LOG_TAG
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.DOWNLOAD_COMMAND
 import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
+import com.chamika.dashtune.data.db.PinnedDownloadDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.MediaItemFactory.Companion.DOWNLOADS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
@@ -30,13 +33,14 @@ import org.json.JSONObject
 
 class MediaRepository(
     private val dao: MediaCacheDao,
+    private val pinnedDownloadDao: PinnedDownloadDao,
     private val tree: JellyfinMediaTree,
     private val itemFactory: MediaItemFactory
 ) {
 
     private val syncMutex = Mutex()
 
-    private val staticIds = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS)
+    private val staticIds = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS, DOWNLOADS)
 
     suspend fun getItem(id: String): MediaItem {
         if (id in staticIds) {
@@ -58,6 +62,12 @@ class MediaRepository(
             return tree.getChildren(ROOT_ID)
         }
 
+        // Downloads is served straight from the pinned-download table (local only), never from
+        // the network-backed library cache — so it works fully offline and reflects removals.
+        if (parentId == DOWNLOADS) {
+            return getDownloads()
+        }
+
         val cached = dao.getChildrenByParent(parentId)
         if (cached.isNotEmpty()) {
             return cached.map { it.toMediaItem() }
@@ -75,6 +85,18 @@ class MediaRepository(
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Failed to fetch children for $parentId from network", e)
             emptyList()
+        }
+    }
+
+    private suspend fun getDownloads(): List<MediaItem> {
+        return pinnedDownloadDao.getAll().map { entity ->
+            itemFactory.downloadedContainer(
+                entity.containerId,
+                entity.title,
+                entity.subtitle,
+                entity.artUri,
+                entity.mediaType
+            )
         }
     }
 
@@ -114,6 +136,9 @@ class MediaRepository(
         FirebaseUtils.safeLog("Sync started: ${sectionIds.size} sections")
 
         for (sectionId in sectionIds) {
+            // Downloads is a local-only view over the pinned-download table; there's nothing to
+            // fetch, and its synthetic id isn't a Jellyfin UUID so a children query would throw.
+            if (sectionId == DOWNLOADS) continue
             try {
                 val children = tree.getChildren(sectionId)
                 children.forEachIndexed { index, item ->
@@ -246,6 +271,13 @@ class MediaRepository(
 
         if (extras != null) {
             metadataBuilder.setExtras(extras)
+        }
+
+        // Re-advertise the "download for offline" browse action on cached container rows; the
+        // fresh MediaItemFactory items carry it, but browse after a sync is served from here.
+        // Audiobooks are cached with MEDIA_TYPE_ALBUM, so they're covered too.
+        if (isPlayable && (mediaType == MEDIA_TYPE_ALBUM || mediaType == MEDIA_TYPE_PLAYLIST)) {
+            metadataBuilder.setSupportedCommands(listOf(DOWNLOAD_COMMAND))
         }
 
         val itemBuilder = MediaItem.Builder()

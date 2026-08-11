@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.DOWNLOADS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
@@ -149,5 +150,19 @@ class JellyfinMediaTreeTest {
         assertTrue(ids.contains(LATEST_ALBUMS))
         assertTrue(ids.contains(FAVOURITES))
         assertTrue(ids.contains(FOLDERS))
+    }
+
+    @Test
+    fun `getActiveCategoryIds includes downloads when that category is selected and keeps it last`() {
+        PreferenceManager.getDefaultSharedPreferences(context).edit()
+            .putStringSet("browse_categories", setOf("downloads", "latest"))
+            .commit()
+
+        val ids = tree.getActiveCategoryIds()
+
+        assertEquals(2, ids.size)
+        // downloads is appended to the canonical order, so it never shifts existing tabs.
+        assertEquals(LATEST_ALBUMS, ids[0])
+        assertEquals(DOWNLOADS, ids[1])
     }
 }

@@ -16,6 +16,7 @@ import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_INTENT_COMPAT
 import androidx.media3.session.MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_LABEL_COMPAT
 import androidx.media3.session.MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_USING_CAR_APP_LIBRARY_INTENT_COMPAT
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaConstants.EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
@@ -28,8 +29,10 @@ import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.auth.JellyfinAccountManager
 import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.data.db.MediaCacheDao
+import com.chamika.dashtune.data.db.PinnedDownloadDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.MediaItemFactory.Companion.DOWNLOADS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemResolver
@@ -54,7 +57,8 @@ class DashTuneSessionCallback(
     private val service: DashTuneMusicService,
     private val accountManager: JellyfinAccountManager,
     private val jellyfinApi: ApiClient,
-    private val mediaCacheDao: MediaCacheDao
+    private val mediaCacheDao: MediaCacheDao,
+    private val pinnedDownloadDao: PinnedDownloadDao
 ) : MediaLibraryService.MediaLibrarySession.Callback {
 
     companion object {
@@ -62,6 +66,8 @@ class DashTuneSessionCallback(
         const val REPEAT_COMMAND = "com.chamika.dashtune.COMMAND.REPEAT"
         const val SHUFFLE_COMMAND = "com.chamika.dashtune.COMMAND.SHUFFLE"
         const val SYNC_COMMAND = "com.chamika.dashtune.COMMAND.SYNC"
+        const val DOWNLOAD_COMMAND = "com.chamika.dashtune.COMMAND.DOWNLOAD"
+        const val REMOVE_DOWNLOAD_COMMAND = "com.chamika.dashtune.COMMAND.REMOVE_DOWNLOAD"
 
         const val PLAYLIST_IDS_PREF = "playlistIds"
         const val PLAYLIST_INDEX_PREF = "playlistIndex"
@@ -102,6 +108,8 @@ class DashTuneSessionCallback(
             .add(SessionCommand(REPEAT_COMMAND, Bundle()))
             .add(SessionCommand(SHUFFLE_COMMAND, Bundle()))
             .add(SessionCommand(SYNC_COMMAND, Bundle()))
+            .add(SessionCommand(DOWNLOAD_COMMAND, Bundle()))
+            .add(SessionCommand(REMOVE_DOWNLOAD_COMMAND, Bundle()))
             .build()
 
         return ConnectionResult.accept(
@@ -118,7 +126,7 @@ class DashTuneSessionCallback(
 
                 val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
                 val tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
-                repository = MediaRepository(mediaCacheDao, tree, itemFactory)
+                repository = MediaRepository(mediaCacheDao, pinnedDownloadDao, tree, itemFactory)
                 resolver = MediaItemResolver(repository)
             }
         }
@@ -582,6 +590,58 @@ class DashTuneSessionCallback(
                         SessionResult(SessionResult.RESULT_SUCCESS)
                     } else {
                         android.widget.Toast.makeText(service, R.string.sync_failed, android.widget.Toast.LENGTH_SHORT).show()
+                        SessionResult(SessionError.ERROR_UNKNOWN)
+                    }
+                }
+            }
+
+            DOWNLOAD_COMMAND -> {
+                val mediaId = args.getString(MediaConstants.EXTRA_KEY_MEDIA_ID)
+                    ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                return SuspendToFutureAdapter.launchFuture {
+                    try {
+                        val container = repository.getItem(mediaId)
+                        // Reuse the same expansion the player uses so an album/playlist/audiobook
+                        // becomes its ordered playable tracks, each already carrying its stream URI.
+                        val tracks = withContext(Dispatchers.IO) {
+                            resolver.resolveMediaItems(listOf(container))
+                        }
+                        val downloads = tracks.mapNotNull { track ->
+                            val uri = track.localConfiguration?.uri ?: return@mapNotNull null
+                            track.mediaId to uri
+                        }
+                        if (downloads.isEmpty()) {
+                            android.widget.Toast.makeText(service, R.string.download_failed, android.widget.Toast.LENGTH_SHORT).show()
+                            return@launchFuture SessionResult(SessionError.ERROR_UNKNOWN)
+                        }
+                        service.pinContainer(container, downloads)
+                        (session as MediaLibraryService.MediaLibrarySession)
+                            .notifyChildrenChanged(DOWNLOADS, Int.MAX_VALUE, null)
+                        android.widget.Toast.makeText(service, R.string.download_started, android.widget.Toast.LENGTH_SHORT).show()
+                        SessionResult(SessionResult.RESULT_SUCCESS)
+                    } catch (e: Exception) {
+                        Log.e(LOG_TAG, "Failed to download $mediaId for offline", e)
+                        FirebaseUtils.safeSetCustomKey("failed_operation", "download_for_offline")
+                        FirebaseUtils.safeRecordException(e)
+                        android.widget.Toast.makeText(service, R.string.download_failed, android.widget.Toast.LENGTH_SHORT).show()
+                        SessionResult(SessionError.ERROR_UNKNOWN)
+                    }
+                }
+            }
+
+            REMOVE_DOWNLOAD_COMMAND -> {
+                val mediaId = args.getString(MediaConstants.EXTRA_KEY_MEDIA_ID)
+                    ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                return SuspendToFutureAdapter.launchFuture {
+                    try {
+                        service.unpinContainer(mediaId)
+                        (session as MediaLibraryService.MediaLibrarySession)
+                            .notifyChildrenChanged(DOWNLOADS, Int.MAX_VALUE, null)
+                        android.widget.Toast.makeText(service, R.string.download_removed, android.widget.Toast.LENGTH_SHORT).show()
+                        SessionResult(SessionResult.RESULT_SUCCESS)
+                    } catch (e: Exception) {
+                        Log.e(LOG_TAG, "Failed to remove download $mediaId", e)
+                        FirebaseUtils.safeRecordException(e)
                         SessionResult(SessionError.ERROR_UNKNOWN)
                     }
                 }

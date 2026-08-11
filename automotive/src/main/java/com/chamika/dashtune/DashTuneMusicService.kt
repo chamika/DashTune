@@ -19,6 +19,7 @@ import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
@@ -28,6 +29,8 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.offline.DefaultDownloadIndex
+import androidx.media3.exoplayer.offline.DefaultDownloaderFactory
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
@@ -41,8 +44,13 @@ import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_INDEX_PREF
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TRACK_POSITON_MS_PREF
 import com.chamika.dashtune.data.db.MediaCacheDao
+import com.chamika.dashtune.data.db.PinnedDownloadDao
+import com.chamika.dashtune.data.db.PinnedDownloadEntity
+import com.chamika.dashtune.media.MediaItemFactory.Companion.DOWNLOADS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
+import org.json.JSONArray
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -161,6 +169,9 @@ class DashTuneMusicService : MediaLibraryService() {
     lateinit var mediaCacheDao: MediaCacheDao
 
     @Inject
+    lateinit var pinnedDownloadDao: PinnedDownloadDao
+
+    @Inject
     lateinit var okHttpClient: okhttp3.OkHttpClient
 
     private lateinit var accountManager: com.chamika.dashtune.auth.JellyfinAccountManager
@@ -190,7 +201,13 @@ class DashTuneMusicService : MediaLibraryService() {
             mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
         }
         if (key == "cache_favourites") {
-            cacheFavouriteTracks()
+            val enabled = PreferenceManager.getDefaultSharedPreferences(this)
+                .getBoolean("cache_favourites", false)
+            if (enabled) {
+                cacheFavouriteTracks()
+            } else {
+                serviceScope.launch { unpinContainer(FAVOURITES) }
+            }
         }
     }
 
@@ -199,6 +216,13 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var downloadManager: DownloadManager
     private lateinit var cacheDataSourceFactory: CacheDataSource.Factory
     private lateinit var httpDataSourceFactory: OkHttpDataSource.Factory
+
+    // Deliberate "download for offline" content. Held in a separate cache with a NoOpCacheEvictor
+    // so pinned downloads are exempt from the LRU eviction that governs the transient cache above,
+    // and driven by its own DownloadManager (custom download-index table name to coexist with the
+    // prefetch manager on the shared database provider).
+    private lateinit var pinnedCache: SimpleCache
+    private lateinit var pinnedDownloadManager: DownloadManager
 
     override fun onCreate() {
         super.onCreate()
@@ -237,9 +261,24 @@ class DashTuneMusicService : MediaLibraryService() {
         // prefetch go through the same TLS configuration as the API calls — including any
         // certificate the user approved at sign-in.
         httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-        cacheDataSourceFactory = CacheDataSource.Factory()
+
+        // Pinned downloads live in their own never-evicted cache. Sharing the databaseProvider is
+        // fine: each SimpleCache keys its content index by a per-directory uid.
+        val pinnedCacheDir = File(cacheDir, "pinned_downloads")
+        pinnedCache = SimpleCache(pinnedCacheDir, NoOpCacheEvictor(), databaseProvider)
+
+        // Transient read/write layer over the network — the existing LRU-cached playback path.
+        val transientCacheFactory = CacheDataSource.Factory()
             .setCache(downloadCache)
             .setUpstreamDataSourceFactory(httpDataSourceFactory)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
+        // Playback checks the pinned cache first (read-only, so a pinned track plays offline and is
+        // never re-copied into the LRU cache), then falls through to the transient cache + network.
+        cacheDataSourceFactory = CacheDataSource.Factory()
+            .setCache(pinnedCache)
+            .setUpstreamDataSourceFactory(transientCacheFactory)
+            .setCacheWriteDataSinkFactory(null)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
         // Disable ID3 metadata parsing on the transcoded MP3 streams. The app fully owns
@@ -262,6 +301,25 @@ class DashTuneMusicService : MediaLibraryService() {
         ).apply {
             maxParallelDownloads = 3
             addListener(downloadListener)
+        }
+
+        // Separate DownloadManager for pinned downloads: its own download-index table (so it does
+        // not collide with the prefetch manager on the shared provider) writing into the pinned,
+        // never-evicted cache.
+        val pinnedExecutor = Executors.newFixedThreadPool(6)
+        val pinnedDownloaderFactory = DefaultDownloaderFactory(
+            CacheDataSource.Factory()
+                .setCache(pinnedCache)
+                .setUpstreamDataSourceFactory(httpDataSourceFactory),
+            pinnedExecutor
+        )
+        pinnedDownloadManager = DownloadManager(
+            this,
+            DefaultDownloadIndex(databaseProvider, "PinnedDownloads"),
+            pinnedDownloaderFactory
+        ).apply {
+            maxParallelDownloads = 3
+            addListener(pinnedDownloadListener)
         }
 
         playerListener = object : Player.Listener {
@@ -442,10 +500,11 @@ class DashTuneMusicService : MediaLibraryService() {
             }
         }
 
-        callback = DashTuneSessionCallback(this, accountManager, jellyfinApi, mediaCacheDao)
+        callback = DashTuneSessionCallback(this, accountManager, jellyfinApi, mediaCacheDao, pinnedDownloadDao)
 
         mediaLibrarySession = MediaLibrarySession.Builder(this, player, callback)
             .setMediaButtonPreferences(CommandButtons.createButtons(player))
+            .setCommandButtonsForMediaItems(CommandButtons.mediaItemButtons(this))
             .build()
 
         PreferenceManager.getDefaultSharedPreferences(this)
@@ -571,9 +630,22 @@ class DashTuneMusicService : MediaLibraryService() {
         }
 
         try {
+            pinnedDownloadManager.removeListener(pinnedDownloadListener)
+            pinnedDownloadManager.release()
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Error releasing pinned download manager", e)
+        }
+
+        try {
             downloadCache.release()
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Error releasing cache", e)
+        }
+
+        try {
+            pinnedCache.release()
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Error releasing pinned cache", e)
         }
 
         networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
@@ -602,8 +674,11 @@ class DashTuneMusicService : MediaLibraryService() {
     fun isTrackCachedOrOnline(mediaId: String): Boolean {
         if (hasInternet()) return true
         return try {
-            val state = downloadManager.downloadIndex.getDownload(mediaId)?.state
-            state == Download.STATE_COMPLETED
+            val prefetched = downloadManager.downloadIndex.getDownload(mediaId)?.state ==
+                    Download.STATE_COMPLETED
+            val pinned = pinnedDownloadManager.downloadIndex.getDownload(mediaId)?.state ==
+                    Download.STATE_COMPLETED
+            prefetched || pinned
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Failed to check cache for $mediaId", e)
             false
@@ -698,11 +773,15 @@ class DashTuneMusicService : MediaLibraryService() {
                 val bitrate = if (preferenceBitrate == "Direct stream") null else preferenceBitrate.toIntOrNull()
                 val allowedContainers = listOf("flac", "mp3", "m4a", "aac", "ogg")
 
+                val favouriteIds = mutableListOf<String>()
                 var queued = 0
                 for (item in items) {
                     try {
                         val id = item.id.toString()
-                        val existing = downloadManager.downloadIndex.getDownload(id)
+                        favouriteIds.add(id)
+                        // Favourites are pinned (never evicted) rather than left in the transient
+                        // cache, so they genuinely survive offline. Skip ones already pinned.
+                        val existing = pinnedDownloadManager.downloadIndex.getDownload(id)
                         if (existing != null && existing.state in listOf(
                                 Download.STATE_COMPLETED,
                                 Download.STATE_DOWNLOADING,
@@ -723,20 +802,112 @@ class DashTuneMusicService : MediaLibraryService() {
                             item.id.toString(),
                             streamUrl.toUri()
                         ).build()
-                        downloadManager.addDownload(downloadRequest)
+                        pinnedDownloadManager.addDownload(downloadRequest)
                         queued++
                     } catch (e: Exception) {
                         Log.w(LOG_TAG, "Failed to queue favourite for cache: ${item.id}", e)
                     }
                 }
                 if (queued > 0) {
-                    downloadManager.resumeDownloads()
+                    pinnedDownloadManager.resumeDownloads()
                     Log.i(LOG_TAG, "Queued $queued favourite tracks for caching")
+                }
+
+                // Surface favourites as a single pinned container under the Downloads node.
+                if (favouriteIds.isNotEmpty()) {
+                    pinnedDownloadDao.upsert(
+                        PinnedDownloadEntity(
+                            containerId = FAVOURITES,
+                            title = getString(R.string.favourites),
+                            subtitle = null,
+                            artUri = null,
+                            mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_MIXED,
+                            trackIds = trackIdsToJson(favouriteIds),
+                            totalTracks = favouriteIds.size,
+                            createdAt = System.currentTimeMillis()
+                        )
+                    )
+                    if (::mediaLibrarySession.isInitialized) {
+                        handler.post {
+                            mediaLibrarySession.notifyChildrenChanged(DOWNLOADS, Int.MAX_VALUE, null)
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "Failed to cache favourites", e)
                 FirebaseUtils.safeRecordException(e)
             }
+        }
+    }
+
+    /**
+     * Enqueues every track of [container] into the pinned (never-evicted) cache and records the
+     * container under the Downloads node. Called from the DOWNLOAD_COMMAND handler with tracks
+     * already resolved to (id, stream URI) pairs.
+     */
+    suspend fun pinContainer(container: MediaItem, tracks: List<Pair<String, android.net.Uri>>) {
+        tracks.forEach { (id, uri) ->
+            try {
+                pinnedDownloadManager.addDownload(DownloadRequest.Builder(id, uri).build())
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to enqueue pinned download: $id", e)
+            }
+        }
+        pinnedDownloadManager.resumeDownloads()
+
+        val meta = container.mediaMetadata
+        val artUri = meta.artworkUri?.let {
+            AlbumArtContentProvider.originalUri(it)?.toString() ?: it.toString()
+        }
+        pinnedDownloadDao.upsert(
+            PinnedDownloadEntity(
+                containerId = container.mediaId,
+                title = meta.title?.toString() ?: "",
+                subtitle = meta.albumArtist?.toString(),
+                artUri = artUri,
+                mediaType = meta.mediaType ?: 0,
+                trackIds = trackIdsToJson(tracks.map { it.first }),
+                totalTracks = tracks.size,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    /** Removes a pinned container's downloads from the pinned cache and forgets the container. */
+    suspend fun unpinContainer(containerId: String) {
+        val entity = pinnedDownloadDao.getById(containerId)
+        val trackIds = entity?.let { jsonToTrackIds(it.trackIds) } ?: emptyList()
+        trackIds.forEach { id ->
+            try {
+                pinnedDownloadManager.removeDownload(id)
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to remove pinned download: $id", e)
+            }
+        }
+        pinnedDownloadDao.deleteById(containerId)
+
+        // Removing the Favourites pin also turns off the auto-cache toggle so it isn't re-added.
+        // Guarded so the resulting preference change doesn't loop back through prefsListener.
+        if (containerId == FAVOURITES) {
+            val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+            if (prefs.getBoolean("cache_favourites", false)) {
+                prefs.edit { putBoolean("cache_favourites", false) }
+            }
+        }
+    }
+
+    private fun trackIdsToJson(ids: List<String>): String {
+        val array = JSONArray()
+        ids.forEach { array.put(it) }
+        return array.toString()
+    }
+
+    private fun jsonToTrackIds(json: String): List<String> {
+        return try {
+            val array = JSONArray(json)
+            (0 until array.length()).map { array.getString(it) }
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 
@@ -853,6 +1024,24 @@ class DashTuneMusicService : MediaLibraryService() {
                     Log.w(LOG_TAG, "Prefetch failed: ${download.request.id}", finalException)
                 Download.STATE_DOWNLOADING ->
                     Log.d(LOG_TAG, "Prefetching: ${download.request.id} (${download.percentDownloaded}%)")
+                else -> {}
+            }
+        }
+    }
+
+    private val pinnedDownloadListener = object : DownloadManager.Listener {
+        override fun onDownloadChanged(
+            downloadManager: DownloadManager,
+            download: Download,
+            finalException: Exception?
+        ) {
+            when (download.state) {
+                Download.STATE_COMPLETED ->
+                    Log.d(LOG_TAG, "Pinned download completed: ${download.request.id}")
+                Download.STATE_FAILED ->
+                    Log.w(LOG_TAG, "Pinned download failed: ${download.request.id}", finalException)
+                Download.STATE_DOWNLOADING ->
+                    Log.d(LOG_TAG, "Pinning: ${download.request.id} (${download.percentDownloaded}%)")
                 else -> {}
             }
         }

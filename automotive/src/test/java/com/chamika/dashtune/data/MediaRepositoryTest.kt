@@ -6,8 +6,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
+import com.chamika.dashtune.data.db.PinnedDownloadDao
+import com.chamika.dashtune.data.db.PinnedDownloadEntity
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.MediaItemFactory.Companion.DOWNLOADS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import io.mockk.coEvery
@@ -28,6 +31,7 @@ import org.robolectric.RobolectricTestRunner
 class MediaRepositoryTest {
 
     private lateinit var dao: MediaCacheDao
+    private lateinit var pinnedDownloadDao: PinnedDownloadDao
     private lateinit var tree: JellyfinMediaTree
     private lateinit var itemFactory: MediaItemFactory
     private lateinit var repository: MediaRepository
@@ -35,10 +39,11 @@ class MediaRepositoryTest {
     @Before
     fun setUp() {
         dao = mockk(relaxed = true)
+        pinnedDownloadDao = mockk(relaxed = true)
         tree = mockk(relaxed = true)
         itemFactory = mockk(relaxed = true)
         every { itemFactory.streamingUri(any()) } returns "http://server/audio/stream"
-        repository = MediaRepository(dao, tree, itemFactory)
+        repository = MediaRepository(dao, pinnedDownloadDao, tree, itemFactory)
     }
 
     // --- getItem tests ---
@@ -533,6 +538,44 @@ class MediaRepositoryTest {
 
         assertEquals(1, result.size)
         assertEquals("track-1", result[0].mediaId)
+    }
+
+    // --- Downloads node tests ---
+
+    @Test
+    fun `getChildren for DOWNLOADS maps pinned entities through the factory`() = runTest {
+        val entity = PinnedDownloadEntity(
+            containerId = "album-1",
+            title = "Album",
+            subtitle = "Artist",
+            artUri = null,
+            mediaType = MediaMetadata.MEDIA_TYPE_ALBUM,
+            trackIds = """["t1","t2"]""",
+            totalTracks = 2,
+            createdAt = 0L
+        )
+        coEvery { pinnedDownloadDao.getAll() } returns listOf(entity)
+        val built = MediaItem.Builder()
+            .setMediaId("album-1")
+            .setMediaMetadata(MediaMetadata.Builder().setTitle("Album").build())
+            .build()
+        every {
+            itemFactory.downloadedContainer("album-1", "Album", "Artist", null, MediaMetadata.MEDIA_TYPE_ALBUM)
+        } returns built
+
+        val result = repository.getChildren(DOWNLOADS)
+
+        assertEquals(1, result.size)
+        assertEquals("album-1", result[0].mediaId)
+    }
+
+    @Test
+    fun `getChildren for DOWNLOADS returns empty when nothing pinned`() = runTest {
+        coEvery { pinnedDownloadDao.getAll() } returns emptyList()
+
+        val result = repository.getChildren(DOWNLOADS)
+
+        assertTrue(result.isEmpty())
     }
 
     // --- search delegate test ---

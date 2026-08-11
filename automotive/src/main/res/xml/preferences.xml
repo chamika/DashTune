@@ -44,6 +44,11 @@
         android:title="@string/sync_library" />
 
     <Preference
+        android:key="downloads_storage"
+        android:selectable="false"
+        android:title="@string/downloads_storage" />
+
+    <Preference
         android:key="clear_cache"
         android:summary="@string/clear_cache_summary"
         android:title="@string/clear_cache" />

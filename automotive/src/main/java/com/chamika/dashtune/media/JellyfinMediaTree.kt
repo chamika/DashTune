@@ -10,6 +10,7 @@ import androidx.preference.PreferenceManager
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.R
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.DOWNLOADS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
@@ -67,7 +68,8 @@ class JellyfinMediaTree(
             "books" to BOOKS,
             "playlists" to PLAYLISTS,
             "random" to RANDOM_ALBUMS,
-            "folders" to FOLDERS
+            "folders" to FOLDERS,
+            "downloads" to DOWNLOADS
         )
         val validKeys = canonicalOrder.map { it.first }.toSet()
         val validSelected = selected.intersect(validKeys)
@@ -117,6 +119,7 @@ class JellyfinMediaTree(
                 id == PLAYLISTS -> itemFactory.playlists()
                 id == BOOKS -> itemFactory.books()
                 id == FOLDERS -> itemFactory.folders()
+                id == DOWNLOADS -> itemFactory.downloads()
                 id.startsWith(SHUFFLE_FOLDER_PREFIX) ->
                     itemFactory.shuffleAll(id.removePrefix(SHUFFLE_FOLDER_PREFIX))
                 else -> retryOnFailure {

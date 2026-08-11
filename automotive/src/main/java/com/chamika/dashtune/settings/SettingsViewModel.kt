@@ -8,6 +8,7 @@ import androidx.preference.PreferenceManager
 import com.chamika.dashtune.AlbumArtContentProvider
 import com.chamika.dashtune.auth.JellyfinAccountManager
 import com.chamika.dashtune.data.db.MediaCacheDao
+import com.chamika.dashtune.data.db.PinnedDownloadDao
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +21,7 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val accountManager: JellyfinAccountManager,
     private val mediaCacheDao: MediaCacheDao,
+    private val pinnedDownloadDao: PinnedDownloadDao,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -28,6 +30,24 @@ class SettingsViewModel @Inject constructor(
 
     fun versionString(): CharSequence =
         "DashTune: ${jellyfin.clientInfo?.version}, Jellyfin API: ${Jellyfin.apiVersion}"
+
+    /** Human-readable size of the pinned (deliberately downloaded) content on disk. */
+    suspend fun downloadsStorageString(): String = withContext(Dispatchers.IO) {
+        val dir = File(context.cacheDir, "pinned_downloads")
+        val bytes = if (dir.exists()) {
+            dir.walkBottomUp().filter { it.isFile }.map { it.length() }.sum()
+        } else {
+            0L
+        }
+        formatBytes(bytes)
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1_000_000_000L -> "%.1f GB".format(bytes / 1_000_000_000.0)
+        bytes >= 1_000_000L -> "%.0f MB".format(bytes / 1_000_000.0)
+        bytes >= 1_000L -> "%.0f KB".format(bytes / 1_000.0)
+        else -> "$bytes B"
+    }
 
     fun forceExit() {
         context.startService(Intent(context, DashTuneMusicService::class.java).apply {
@@ -57,8 +77,10 @@ class SettingsViewModel @Inject constructor(
 
         withContext(Dispatchers.IO) {
             mediaCacheDao.deleteAll()
+            pinnedDownloadDao.deleteAll()
             AlbumArtContentProvider.clearCache(context.cacheDir)
             File(context.cacheDir, "exoplayer_cache").deleteRecursively()
+            File(context.cacheDir, "pinned_downloads").deleteRecursively()
         }
 
         PreferenceManager.getDefaultSharedPreferences(context).edit().apply {

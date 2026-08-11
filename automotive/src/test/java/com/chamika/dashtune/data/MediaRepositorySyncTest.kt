@@ -8,6 +8,7 @@ import androidx.media3.common.MediaMetadata
 import com.chamika.dashtune.AlbumArtContentProvider
 import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
+import com.chamika.dashtune.data.db.PinnedDownloadDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
@@ -38,6 +39,7 @@ import org.robolectric.RobolectricTestRunner
 class MediaRepositorySyncTest {
 
     private lateinit var dao: MediaCacheDao
+    private lateinit var pinnedDownloadDao: PinnedDownloadDao
     private lateinit var tree: JellyfinMediaTree
     private lateinit var itemFactory: MediaItemFactory
     private lateinit var repository: MediaRepository
@@ -45,10 +47,11 @@ class MediaRepositorySyncTest {
     @Before
     fun setUp() {
         dao = mockk(relaxed = true)
+        pinnedDownloadDao = mockk(relaxed = true)
         tree = mockk(relaxed = true)
         itemFactory = mockk(relaxed = true)
         every { itemFactory.streamingUri(any()) } returns "http://server/audio/stream"
-        repository = MediaRepository(dao, tree, itemFactory)
+        repository = MediaRepository(dao, pinnedDownloadDao, tree, itemFactory)
     }
 
     private fun buildMediaItem(

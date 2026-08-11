@@ -6,6 +6,7 @@ import androidx.preference.PreferenceManager
 import com.chamika.dashtune.DashTuneMusicService
 import com.chamika.dashtune.auth.JellyfinAccountManager
 import com.chamika.dashtune.data.db.MediaCacheDao
+import com.chamika.dashtune.data.db.PinnedDownloadDao
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -30,6 +31,7 @@ class SettingsViewModelTest {
     private lateinit var context: Application
     private lateinit var accountManager: JellyfinAccountManager
     private lateinit var mediaCacheDao: MediaCacheDao
+    private lateinit var pinnedDownloadDao: PinnedDownloadDao
     private lateinit var viewModel: SettingsViewModel
 
     @Before
@@ -41,7 +43,8 @@ class SettingsViewModelTest {
 
         accountManager = mockk(relaxed = true)
         mediaCacheDao = mockk(relaxed = true)
-        viewModel = SettingsViewModel(accountManager, mediaCacheDao, context)
+        pinnedDownloadDao = mockk(relaxed = true)
+        viewModel = SettingsViewModel(accountManager, mediaCacheDao, pinnedDownloadDao, context)
     }
 
     // --- logout ---
@@ -58,6 +61,20 @@ class SettingsViewModelTest {
         viewModel.logout()
 
         coVerify { mediaCacheDao.deleteAll() }
+    }
+
+    @Test
+    fun `logout clears pinned downloads`() = runTest {
+        viewModel.logout()
+
+        coVerify { pinnedDownloadDao.deleteAll() }
+    }
+
+    @Test
+    fun `clearCache keeps pinned downloads`() = runTest {
+        viewModel.clearCache()
+
+        coVerify(exactly = 0) { pinnedDownloadDao.deleteAll() }
     }
 
     @Test
