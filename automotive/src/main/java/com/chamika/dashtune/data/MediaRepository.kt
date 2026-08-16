@@ -28,6 +28,11 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTER_BUCKET_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.FirebaseUtils
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
@@ -39,6 +44,13 @@ class MediaRepository(
 ) {
 
     private val syncMutex = Mutex()
+
+    private val inFlightLock = Any()
+    private val inFlight = HashMap<String, Deferred<List<MediaItem>>>()
+
+    // Deliberately not the caller's scope: a shared fetch must not be cancelled when the
+    // browser that happened to start it gives up (browse calls run under a timeout).
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val staticIds = setOf(
         ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS,
@@ -82,12 +94,37 @@ class MediaRepository(
             return cached.map { it.toMediaItem() }
         }
 
+        // Paginating browsers ask for several pages at once, so a cold parent can be
+        // requested concurrently. Without coalescing, each caller fetches independently —
+        // and for RANDOM_ALBUMS every fetch is a different set of albums, so the writes
+        // below would union two random results under one parentId with colliding
+        // sortOrder values, leaving the browse order unstable from then on.
+        val fetch = synchronized(inFlightLock) {
+            inFlight[parentId] ?: scope.async { fetchAndCacheChildren(parentId) }
+                .also { inFlight[parentId] = it }
+        }
+        // Cleanup hangs off the fetch, not off this caller: browse runs under a timeout, and
+        // a cancelled caller must neither leak the entry nor evict a fetch others still share.
+        fetch.invokeOnCompletion {
+            synchronized(inFlightLock) {
+                if (inFlight[parentId] === fetch) inFlight.remove(parentId)
+            }
+        }
+
+        return fetch.await()
+    }
+
+    private suspend fun fetchAndCacheChildren(parentId: String): List<MediaItem> {
         return try {
             val children = tree.getChildren(parentId)
             if (children.isNotEmpty()) {
                 val entities = children.mapIndexed { index, item ->
                     item.toEntity(parentId, index)
                 }
+                // Drop whatever was cached under this parent first: insertAll only
+                // REPLACEs rows whose (mediaId, parentId) still appears in the new list,
+                // so items that dropped out would otherwise linger with stale sortOrder.
+                dao.deleteByParent(parentId)
                 dao.insertAll(entities)
             }
             children
