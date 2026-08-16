@@ -10,9 +10,12 @@ import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ARTISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
@@ -203,6 +206,36 @@ class MediaRepositorySyncTest {
         repository.sync()
 
         coVerify(exactly = 0) { tree.getChildren("folder-1") }
+    }
+
+    @Test
+    fun `sync does not recursively fetch children for the alphabet index or genres`() = runTest {
+        // Recursing would fan out to 27 buckets x every artist x every album — a
+        // library-sized fetch for what is meant to be a routine sync.
+        val bucket = buildMediaItem(
+            MediaItemFactory.letterBucketId(ARTISTS, "A"),
+            title = "A",
+            mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_ARTISTS,
+            isPlayable = false,
+            isBrowsable = true
+        )
+        val genre = buildMediaItem(
+            "genre-1",
+            title = "Rock",
+            mediaType = MediaMetadata.MEDIA_TYPE_GENRE,
+            isPlayable = false,
+            isBrowsable = true
+        )
+
+        coEvery { tree.getActiveCategoryIds() } returns listOf(ARTISTS, ALBUMS, GENRES)
+        coEvery { tree.getChildren(ARTISTS) } returns listOf(bucket)
+        coEvery { tree.getChildren(ALBUMS) } returns listOf(bucket)
+        coEvery { tree.getChildren(GENRES) } returns listOf(genre)
+
+        assertTrue(repository.sync())
+
+        coVerify(exactly = 0) { tree.getChildren(bucket.mediaId) }
+        coVerify(exactly = 0) { tree.getChildren("genre-1") }
     }
 
     @Test

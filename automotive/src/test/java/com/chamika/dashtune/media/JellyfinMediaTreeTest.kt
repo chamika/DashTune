@@ -3,9 +3,12 @@ package com.chamika.dashtune.media
 import android.content.Context
 import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ARTISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
@@ -149,5 +152,27 @@ class JellyfinMediaTreeTest {
         assertTrue(ids.contains(LATEST_ALBUMS))
         assertTrue(ids.contains(FAVOURITES))
         assertTrue(ids.contains(FOLDERS))
+    }
+
+    @Test
+    fun `getActiveCategoryIds includes artists albums and genres when selected`() {
+        PreferenceManager.getDefaultSharedPreferences(context).edit()
+            .putStringSet("browse_categories", setOf("genres", "artists", "albums"))
+            .commit()
+
+        val ids = tree.getActiveCategoryIds()
+
+        assertEquals(listOf(ARTISTS, ALBUMS, GENRES), ids)
+    }
+
+    @Test
+    fun `getActiveCategoryIds keeps the pre-existing categories ahead of the new ones`() {
+        PreferenceManager.getDefaultSharedPreferences(context).edit()
+            .putStringSet("browse_categories", setOf("artists", "latest", "genres", "folders"))
+            .commit()
+
+        val ids = tree.getActiveCategoryIds()
+
+        assertEquals(listOf(LATEST_ALBUMS, FOLDERS, ARTISTS, GENRES), ids)
     }
 }

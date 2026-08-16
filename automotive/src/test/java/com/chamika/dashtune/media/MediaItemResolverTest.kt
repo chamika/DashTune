@@ -7,7 +7,9 @@ import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -319,6 +321,68 @@ class MediaItemResolverTest {
         assertEquals(2, result.size)
         assertEquals("track-1", result[0].mediaId)
         assertEquals("track-2", result[1].mediaId)
+    }
+
+    @Test
+    fun `shuffle genre pseudo-item expands via repository getShuffledGenreTracks`() = runTest {
+        val shuffleItem = buildMediaItem(
+            mediaId = SHUFFLE_GENRE_PREFIX + "genre-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST,
+            isPlayable = true,
+            isBrowsable = false
+        )
+        val track = buildMediaItem(
+            mediaId = "track-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+            isPlayable = true,
+            isBrowsable = false,
+            uri = "http://server/audio/track-1"
+        )
+
+        coEvery { repository.getShuffledGenreTracks("genre-1") } returns listOf(track)
+
+        val result = resolver.resolveMediaItems(listOf(shuffleItem))
+
+        assertEquals(listOf("track-1"), result.map { it.mediaId })
+        coVerify(exactly = 0) { repository.getShuffledTracks(any()) }
+    }
+
+    @Test
+    fun `isSingleItemWithParent returns false for shuffle genre id without querying repository`() = runTest {
+        val shuffleItem = buildMediaItem(
+            mediaId = SHUFFLE_GENRE_PREFIX + "genre-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST,
+            isPlayable = true,
+            isBrowsable = false
+        )
+
+        assertFalse(resolver.isSingleItemWithParent(listOf(shuffleItem)))
+    }
+
+    @Test
+    fun `expandSingleItem drops an injected genre shuffle sibling`() = runTest {
+        val track = buildMediaItem(
+            mediaId = "track-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+            isPlayable = true,
+            isBrowsable = false,
+            uri = "http://server/audio/track-1",
+            parentKey = "genre-1"
+        )
+        val genreShuffle = buildMediaItem(
+            mediaId = SHUFFLE_GENRE_PREFIX + "genre-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST,
+            isPlayable = true,
+            isBrowsable = false
+        )
+
+        coEvery { repository.getItem("track-1") } returns track
+        coEvery { repository.getChildren("genre-1") } returns listOf(genreShuffle, track)
+
+        val result = resolver.expandSingleItem(track)
+
+        assertEquals(listOf("track-1"), result.map { it.mediaId })
+        coVerify(exactly = 0) { repository.getShuffledGenreTracks(any()) }
     }
 
     @Test
