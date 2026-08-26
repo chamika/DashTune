@@ -24,7 +24,11 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ARTISTS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTER_BUCKET_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.FirebaseUtils
 import kotlinx.coroutines.sync.Mutex
@@ -40,7 +44,18 @@ class MediaRepository(
 
     private val syncMutex = Mutex()
 
-    private val staticIds = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS, DOWNLOADS)
+    private val staticIds = setOf(
+        ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS,
+        ARTISTS, ALBUMS, GENRES, DOWNLOADS
+    )
+
+    /**
+     * Sections whose children are not crawled during [sync]. Folders are arbitrarily deep
+     * on-disk trees, and the alphabet index would fan out to 27 buckets × every artist ×
+     * every album — either turns a routine sync into a library-sized fetch. Deeper levels
+     * cache lazily via [getChildren] as the user browses.
+     */
+    private val shallowSyncSections = setOf(FOLDERS, ARTISTS, ALBUMS, GENRES)
 
     suspend fun getItem(id: String): MediaItem {
         if (id in staticIds) {
@@ -54,7 +69,11 @@ class MediaRepository(
     }
 
     suspend fun getContentParentId(mediaId: String): String? {
-        return dao.getParentIds(mediaId).firstOrNull { it !in staticIds }
+        // Letter buckets are browse scaffolding, not containers of playable siblings —
+        // treat them like the static category ids so expandSingleItem never expands one.
+        return dao.getParentIds(mediaId).firstOrNull {
+            it !in staticIds && !it.startsWith(LETTER_BUCKET_PREFIX)
+        }
     }
 
     suspend fun getChildren(parentId: String): List<MediaItem> {
@@ -113,6 +132,15 @@ class MediaRepository(
         }
     }
 
+    suspend fun getShuffledGenreTracks(genreId: String): List<MediaItem> {
+        return try {
+            tree.getShuffledGenreTracks(genreId)
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Genre shuffle query failed for $genreId, falling back to cache", e)
+            cachedDescendantTracks(genreId).shuffled()
+        }
+    }
+
     private suspend fun cachedDescendantTracks(folderId: String, depth: Int = 0): List<MediaItem> {
         if (depth > 10) return emptyList()
         return dao.getChildrenByParent(folderId).flatMap {
@@ -143,10 +171,7 @@ class MediaRepository(
                 val children = tree.getChildren(sectionId)
                 children.forEachIndexed { index, item ->
                     allEntities.add(item.toEntity(sectionId, index))
-                    // Folders can be arbitrarily deep on-disk trees; don't let a full
-                    // recursive crawl turn a routine sync into a library-sized fetch.
-                    // Deeper levels cache lazily via getChildren as the user browses.
-                    if (sectionId != FOLDERS) {
+                    if (sectionId !in shallowSyncSections) {
                         syncChildrenRecursively(item, allEntities)
                     }
                 }

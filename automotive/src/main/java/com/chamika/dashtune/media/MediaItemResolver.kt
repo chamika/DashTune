@@ -8,6 +8,8 @@ import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.isShuffleId
 
 class MediaItemResolver(
     private val repository: MediaRepository
@@ -20,6 +22,13 @@ class MediaItemResolver(
             if (it.mediaId.startsWith(SHUFFLE_FOLDER_PREFIX)) {
                 playlist.addAll(
                     repository.getShuffledTracks(it.mediaId.removePrefix(SHUFFLE_FOLDER_PREFIX))
+                )
+                return@forEach
+            }
+
+            if (it.mediaId.startsWith(SHUFFLE_GENRE_PREFIX)) {
+                playlist.addAll(
+                    repository.getShuffledGenreTracks(it.mediaId.removePrefix(SHUFFLE_GENRE_PREFIX))
                 )
                 return@forEach
             }
@@ -57,7 +66,7 @@ class MediaItemResolver(
         // A shuffle pseudo-item may be cached as a normal folder child in Room, which
         // would make the DB-parent fallback below misidentify it as "one track from a
         // folder" and play only that folder's immediate children non-recursively.
-        if (mediaId.startsWith(SHUFFLE_FOLDER_PREFIX)) return false
+        if (isShuffleId(mediaId)) return false
         val item = repository.getItem(mediaId)
         // An album/playlist is itself an expandable container: tapping it should play its
         // own tracks, not expand the whole parent folder. In folder browse these have a
@@ -82,12 +91,12 @@ class MediaItemResolver(
             ?: repository.getContentParentId(item.mediaId)
             ?: return listOf(item)
         val children = repository.getChildren(parentId)
-            // Folder-browse children carry an injected "Shuffle all" pseudo-item at the
-            // front. It's a browse-only affordance, not a real sibling — resolving it would
+            // Folder-browse and genre children carry an injected "Shuffle all" pseudo-item
+            // at the front. It's a browse-only affordance, not a real sibling — resolving it would
             // splice a whole random shuffle of the folder's descendants into the queue and
             // start playback on the wrong track. Drop it so tapping a song plays that song
             // and its actual siblings in order.
-            .filterNot { it.mediaId.startsWith(SHUFFLE_FOLDER_PREFIX) }
+            .filterNot { isShuffleId(it.mediaId) }
         return resolveMediaItems(children)
     }
 }

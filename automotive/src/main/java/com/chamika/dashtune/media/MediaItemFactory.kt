@@ -40,10 +40,34 @@ class MediaItemFactory(
         const val BOOKS = "BOOKS_ID"
         const val FOLDERS = "FOLDERS_ID"
         const val DOWNLOADS = "DOWNLOADS_ID"
+        const val ARTISTS = "ARTISTS_ID"
+        const val ALBUMS = "ALBUMS_ID"
+        const val GENRES = "GENRES_ID"
         const val SHUFFLE_FOLDER_PREFIX = "SHUFFLE_FOLDER:"
+        // A genre shuffle can't reuse the folder one: folders shuffle by parentId,
+        // genres by genreIds, so the two need distinguishable media ids.
+        const val SHUFFLE_GENRE_PREFIX = "SHUFFLE_GENRE:"
+        const val LETTER_BUCKET_PREFIX = "LETTER:"
         const val PARENT_KEY = "PARENT_KEY"
         const val IS_AUDIOBOOK_KEY = "is_audiobook"
         const val IS_FOLDER_KEY = "is_folder_browse"
+
+        /** Alphabet index shown under Artists and Albums; "#" collects non-alphabetic names. */
+        val LETTERS: List<String> = listOf("#") + ('A'..'Z').map(Char::toString)
+
+        fun isShuffleId(id: String): Boolean =
+            id.startsWith(SHUFFLE_FOLDER_PREFIX) || id.startsWith(SHUFFLE_GENRE_PREFIX)
+
+        fun letterBucketId(categoryId: String, letter: String): String =
+            "$LETTER_BUCKET_PREFIX$categoryId:$letter"
+
+        /** Splits a [letterBucketId] back into its category id and letter, or null if malformed. */
+        fun parseLetterBucketId(id: String): Pair<String, String>? {
+            val body = id.removePrefix(LETTER_BUCKET_PREFIX)
+            val separator = body.indexOf(':')
+            if (separator <= 0 || separator == body.lastIndex) return null
+            return body.substring(0, separator) to body.substring(separator + 1)
+        }
 
         private const val EXTRA_COMPLETION_STATUS = "android.media.extra.COMPLETION_STATUS"
         private const val EXTRA_COMPLETION_PERCENTAGE = "android.media.extra.COMPLETION_PERCENTAGE"
@@ -226,16 +250,75 @@ class MediaItemFactory(
         }
     }
 
-    private fun albumCategory(id: String, label: String, icon: String): MediaItem {
+    fun artists(): MediaItem {
+        return albumCategory(
+            ARTISTS,
+            context.getString(R.string.artists),
+            "ic_artist",
+            mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_ARTISTS
+        )
+    }
+
+    fun albums(): MediaItem {
+        return albumCategory(ALBUMS, context.getString(R.string.albums), "ic_album")
+    }
+
+    fun genres(): MediaItem {
+        return albumCategory(
+            GENRES,
+            context.getString(R.string.genres),
+            "ic_genre",
+            mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_GENRES,
+            // Genres rarely carry artwork, so a grid of blank tiles reads worse than a list.
+            contentStyle = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+    }
+
+    /**
+     * One letter of the Artists/Albums alphabet index. Built entirely client side so it
+     * still resolves when the tree cache is cold and the network is down.
+     */
+    fun letterBucket(categoryId: String, letter: String): MediaItem {
         val extras = Bundle()
         extras.putInt(
             MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
-            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
         )
         extras.putInt(
             MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
-            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
         )
+
+        val mediaType = if (categoryId == ARTISTS) {
+            MediaMetadata.MEDIA_TYPE_FOLDER_ARTISTS
+        } else {
+            MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS
+        }
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(letter)
+            .setIsBrowsable(true)
+            .setIsPlayable(false)
+            .setMediaType(mediaType)
+            .setExtras(extras)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(letterBucketId(categoryId, letter))
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    private fun albumCategory(
+        id: String,
+        label: String,
+        icon: String,
+        mediaType: Int = MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS,
+        contentStyle: Int = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+    ): MediaItem {
+        val extras = Bundle()
+        extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE, contentStyle)
+        extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, contentStyle)
 
         val metadata = MediaMetadata.Builder()
             .setTitle(label)
@@ -243,7 +326,7 @@ class MediaItemFactory(
             .setIsPlayable(false)
             .setArtworkUri("android.resource://com.chamika.dashtune/drawable/$icon".toUri())
             .setExtras(extras)
-            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS)
+            .setMediaType(mediaType)
             .build()
 
         return MediaItem.Builder()
@@ -277,6 +360,35 @@ class MediaItemFactory(
             .setIsPlayable(false)
             .setArtworkUri(artUri(item.id))
             .setMediaType(MediaMetadata.MEDIA_TYPE_ARTIST)
+            .setExtras(extras)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(item.id.toString())
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    private fun forGenre(item: BaseItemDto, group: String? = null): MediaItem {
+        val extras = Bundle()
+        if (group != null) {
+            extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
+        }
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(item.name)
+            .setIsBrowsable(true)
+            .setIsPlayable(false)
+            .setArtworkUri(artUri(item.id))
+            .setMediaType(MediaMetadata.MEDIA_TYPE_GENRE)
             .setExtras(extras)
             .build()
 
@@ -410,7 +522,11 @@ class MediaItemFactory(
             .build()
     }
 
-    fun shuffleAll(folderId: String): MediaItem {
+    fun shuffleAll(folderId: String): MediaItem = shuffleItem(SHUFFLE_FOLDER_PREFIX + folderId)
+
+    fun shuffleGenre(genreId: String): MediaItem = shuffleItem(SHUFFLE_GENRE_PREFIX + genreId)
+
+    private fun shuffleItem(mediaId: String): MediaItem {
         val extras = Bundle()
         extras.putInt(
             MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
@@ -427,7 +543,7 @@ class MediaItemFactory(
             .build()
 
         return MediaItem.Builder()
-            .setMediaId(SHUFFLE_FOLDER_PREFIX + folderId)
+            .setMediaId(mediaId)
             .setMediaMetadata(metadata)
             .build()
     }
@@ -533,6 +649,7 @@ class MediaItemFactory(
         return when (baseItemDto.type) {
             BaseItemKind.MUSIC_ARTIST -> forArtist(baseItemDto, group, isFolderBrowse)
             BaseItemKind.MUSIC_ALBUM -> forAlbum(baseItemDto, group)
+            BaseItemKind.MUSIC_GENRE, BaseItemKind.GENRE -> forGenre(baseItemDto, group)
             BaseItemKind.AUDIO_BOOK -> forAudiobook(baseItemDto, group, parent)
             BaseItemKind.FOLDER -> forFolder(baseItemDto, group, isAudiobook, isFolderBrowse)
             BaseItemKind.COLLECTION_FOLDER -> forFolder(baseItemDto, group, isAudiobook, isFolderBrowse)

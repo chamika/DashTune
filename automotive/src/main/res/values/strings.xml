@@ -31,6 +31,7 @@
     <string name="cancel">Cancel</string>
     <string name="books">Books</string>
     <string name="folders">Folders</string>
+    <string name="genres">Genres</string>
     <string name="favourites">Favourites</string>
     <string name="downloads">Downloads</string>
     <string name="download_for_offline">Download for offline</string>

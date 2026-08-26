@@ -65,6 +65,9 @@
         <item>Playlists</item>
         <item>Random</item>
         <item>Folders</item>
+        <item>Artists</item>
+        <item>Albums</item>
+        <item>Genres</item>
         <item>Downloads</item>
     </string-array>
 
@@ -75,6 +78,9 @@
         <item>playlists</item>
         <item>random</item>
         <item>folders</item>
+        <item>artists</item>
+        <item>albums</item>
+        <item>genres</item>
         <item>downloads</item>
     </string-array>
 

@@ -6,9 +6,13 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaConstants
 import androidx.test.core.app.ApplicationProvider
 import com.chamika.dashtune.AlbumArtContentProvider
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ARTISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
@@ -16,6 +20,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
@@ -282,6 +287,126 @@ class MediaItemFactoryTest {
         assertNull(item.localConfiguration)
         assertNull(item.mediaMetadata.extras?.getString(PARENT_KEY))
         assertFalse(item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true)
+    }
+
+    // --- Artists / Albums / Genres category tests ---
+
+    @Test
+    fun `artists is a browsable artist folder`() {
+        val item = factory.artists()
+
+        assertEquals(ARTISTS, item.mediaId)
+        assertTrue(item.mediaMetadata.isBrowsable == true)
+        assertFalse(item.mediaMetadata.isPlayable == true)
+        assertEquals(MediaMetadata.MEDIA_TYPE_FOLDER_ARTISTS, item.mediaMetadata.mediaType)
+    }
+
+    @Test
+    fun `albums is a browsable album folder`() {
+        val item = factory.albums()
+
+        assertEquals(ALBUMS, item.mediaId)
+        assertTrue(item.mediaMetadata.isBrowsable == true)
+        assertFalse(item.mediaMetadata.isPlayable == true)
+        assertEquals(MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS, item.mediaMetadata.mediaType)
+    }
+
+    @Test
+    fun `genres is a browsable genre folder styled as a list`() {
+        val item = factory.genres()
+
+        assertEquals(GENRES, item.mediaId)
+        assertTrue(item.mediaMetadata.isBrowsable == true)
+        assertFalse(item.mediaMetadata.isPlayable == true)
+        assertEquals(MediaMetadata.MEDIA_TYPE_FOLDER_GENRES, item.mediaMetadata.mediaType)
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+            item.mediaMetadata.extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE)
+        )
+    }
+
+    @Test
+    fun `existing album categories keep their grid content style`() {
+        val item = factory.latestAlbums()
+
+        assertEquals(MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS, item.mediaMetadata.mediaType)
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM,
+            item.mediaMetadata.extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE)
+        )
+    }
+
+    @Test
+    fun `letterBucket is browsable with the letter as its title`() {
+        val item = factory.letterBucket(ARTISTS, "A")
+
+        assertEquals("A", item.mediaMetadata.title)
+        assertTrue(item.mediaMetadata.isBrowsable == true)
+        assertFalse(item.mediaMetadata.isPlayable == true)
+        assertEquals(MediaMetadata.MEDIA_TYPE_FOLDER_ARTISTS, item.mediaMetadata.mediaType)
+        // No network call is needed to build a bucket, so it has no artwork to fetch.
+        assertNull(item.mediaMetadata.artworkUri)
+    }
+
+    @Test
+    fun `letterBucket under albums is typed as an album folder`() {
+        val item = factory.letterBucket(ALBUMS, "B")
+
+        assertEquals(MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS, item.mediaMetadata.mediaType)
+    }
+
+    @Test
+    fun `letterBucket ids round-trip through parseLetterBucketId`() {
+        LETTERS.forEach { letter ->
+            listOf(ARTISTS, ALBUMS).forEach { category ->
+                val id = factory.letterBucket(category, letter).mediaId
+                assertEquals(category to letter, MediaItemFactory.parseLetterBucketId(id))
+            }
+        }
+    }
+
+    @Test
+    fun `parseLetterBucketId returns null for malformed ids`() {
+        assertNull(MediaItemFactory.parseLetterBucketId("LETTER:"))
+        assertNull(MediaItemFactory.parseLetterBucketId("LETTER:ARTISTS_ID"))
+        assertNull(MediaItemFactory.parseLetterBucketId("LETTER:ARTISTS_ID:"))
+        assertNull(MediaItemFactory.parseLetterBucketId("LETTER::A"))
+    }
+
+    @Test
+    fun `LETTERS covers the alphabet plus a non-alphabetic bucket`() {
+        assertEquals(27, LETTERS.size)
+        assertEquals("#", LETTERS.first())
+        assertEquals("Z", LETTERS.last())
+    }
+
+    @Test
+    fun `create music genre is browsable and not playable`() {
+        val item = factory.create(baseItem(BaseItemKind.MUSIC_GENRE))
+
+        assertTrue(item.mediaMetadata.isBrowsable == true)
+        assertFalse(item.mediaMetadata.isPlayable == true)
+        assertEquals(MediaMetadata.MEDIA_TYPE_GENRE, item.mediaMetadata.mediaType)
+    }
+
+    @Test
+    fun `create generic genre is browsable and not playable`() {
+        val item = factory.create(baseItem(BaseItemKind.GENRE))
+
+        assertTrue(item.mediaMetadata.isBrowsable == true)
+        assertEquals(MediaMetadata.MEDIA_TYPE_GENRE, item.mediaMetadata.mediaType)
+    }
+
+    @Test
+    fun `shuffleGenre uses its own prefix so it is distinguishable from a folder shuffle`() {
+        val item = factory.shuffleGenre("genre-123")
+
+        assertEquals(SHUFFLE_GENRE_PREFIX + "genre-123", item.mediaId)
+        assertTrue(item.mediaMetadata.isPlayable == true)
+        assertFalse(item.mediaMetadata.isBrowsable == true)
+        assertTrue(MediaItemFactory.isShuffleId(item.mediaId))
+        assertTrue(MediaItemFactory.isShuffleId(factory.shuffleAll("folder-1").mediaId))
+        assertFalse(MediaItemFactory.isShuffleId("some-uuid"))
     }
 
     // --- Group extras tests ---
