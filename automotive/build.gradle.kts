@@ -14,8 +14,8 @@ android {
         applicationId = "com.chamika.dashtune"
         minSdk = 28
         targetSdk = 36
-        versionCode = 28
-        versionName = "1.3.2"
+        versionCode = 29
+        versionName = "1.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
