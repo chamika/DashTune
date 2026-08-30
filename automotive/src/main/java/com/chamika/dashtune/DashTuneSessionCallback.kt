@@ -181,7 +181,7 @@ class DashTuneSessionCallback(
         pageSize: Int,
         params: MediaLibraryService.LibraryParams?
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-        Log.i(LOG_TAG, "onGetChildren $parentId")
+        Log.i(LOG_TAG, "onGetChildren $parentId page=$page pageSize=$pageSize")
         if (!accountManager.isAuthenticated) {
             return Futures.immediateFuture(
                 LibraryResult.ofError(
@@ -202,7 +202,7 @@ class DashTuneSessionCallback(
                 val children = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
                     repository.getChildren(parentId)
                 } ?: throw java.util.concurrent.TimeoutException("Browse timed out after ${BROWSE_TIMEOUT_MS}ms")
-                LibraryResult.ofItemList(children, params)
+                LibraryResult.ofItemList(children.page(page, pageSize), params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get children for $parentId", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_children")
@@ -217,6 +217,24 @@ class DashTuneSessionCallback(
                 )
             }
         }
+    }
+
+    /**
+     * Head units that page their browse lists expect page N to hold items
+     * [N * pageSize, (N + 1) * pageSize). Handing back the whole list for every page makes
+     * the browser splice in a duplicate copy, which changes the item count under its
+     * RecyclerView and rebinds it from the top — the list "jumps back up" mid-scroll.
+     * Browsers that don't paginate arrive here as page 0 with pageSize Int.MAX_VALUE and
+     * still get everything.
+     */
+    private fun List<MediaItem>.page(page: Int, pageSize: Int): ImmutableList<MediaItem> {
+        if (page < 0 || pageSize <= 0) return ImmutableList.copyOf(this)
+        // Long arithmetic: page * pageSize overflows for the Int.MAX_VALUE page size that
+        // Media3 substitutes for unpaginated browsers.
+        val from = page.toLong() * pageSize
+        if (from >= size) return ImmutableList.of()
+        val to = minOf(size.toLong(), from + pageSize)
+        return ImmutableList.copyOf(subList(from.toInt(), to.toInt()))
     }
 
     private fun authenticationExtras(): Bundle {
@@ -477,7 +495,7 @@ class DashTuneSessionCallback(
                 val results = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
                     repository.search(query)
                 } ?: throw java.util.concurrent.TimeoutException("Search timed out after ${BROWSE_TIMEOUT_MS}ms")
-                LibraryResult.ofItemList(results, params)
+                LibraryResult.ofItemList(results.page(page, pageSize), params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_search_result")
