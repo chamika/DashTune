@@ -2,92 +2,12 @@
 
 Jellyfin music and audiobook player for Android Automotive OS (AAOS) with offline download capabilities.
 
-## Build & Run
-
-```bash
-# Debug build
-./gradlew :automotive:assembleDebug
-
-# Release bundle
-./gradlew :automotive:bundleRelease
-
-# Install on connected device/emulator
-./gradlew :automotive:installDebug
-```
-
 ## Releasing
 
-1. Bump `versionCode` (increment by 1) and `versionName` (semver) in `automotive/build.gradle.kts`
-2. Commit **only** `automotive/build.gradle.kts` with this exact message format:
-
-```
-Release v<versionName>(<versionCode>)
-
-<Short one-line description of the release>
-
-Full release notes:
-
-- <bullet 1>
-- <bullet 2>
-```
-
-Example: `Release v1.2.2(18)`
-
-- **Min SDK**: 28 (Android 9)
-- **Target SDK**: 36
-- **Compile SDK**: 36
-- **JVM**: 17
-- **Kotlin**: 2.3.10
-- **Gradle**: Uses version catalog (`gradle/libs.versions.toml`)
-
-## Project Structure
-
-Single module: `automotive/`
-
-```
-automotive/src/main/java/com/chamika/dashtune/
-├── DashTuneApplication.kt          # @HiltAndroidApp entry point
-├── DashTuneMusicService.kt         # MediaLibraryService - core playback service
-├── DashTuneSessionCallback.kt      # Media session callbacks, browsing tree
-├── AlbumArtContentProvider.kt      # ContentProvider serving album art to system UI
-├── CommandButtons.kt               # Shuffle/repeat command button definitions
-├── Constants.kt                    # App constants (LOG_TAG)
-├── FirebaseUtils.kt                # Safe Firebase Analytics/Crashlytics wrapper
-├── auth/
-│   ├── Authenticator.kt            # Android AccountAuthenticator
-│   ├── AuthenticatorService.kt     # Authenticator bound service
-│   └── JellyfinAccountManager.kt   # Account storage wrapper
-├── data/
-│   ├── MediaRepository.kt          # Cache layer: syncs Jellyfin items to Room DB
-│   └── db/
-│       ├── CachedMediaItemEntity.kt # Room entity for cached media items
-│       ├── DashTuneDatabase.kt     # Room database definition
-│       └── MediaCacheDao.kt        # DAO for media cache queries
-├── di/
-│   └── DashTuneModule.kt           # Hilt module (Jellyfin SDK, AccountManager, Room)
-├── media/
-│   ├── JellyfinMediaTree.kt        # Browsable media tree with Guava cache
-│   └── MediaItemFactory.kt         # Converts Jellyfin DTOs to Media3 MediaItems
-├── signin/
-│   ├── SignInActivity.kt           # Sign-in host activity
-│   ├── SignInViewModel.kt          # Server ping, QuickConnect, username/password auth
-│   ├── ServerSignInFragment.kt     # Server URL input
-│   └── CredentialsFragment.kt      # QuickConnect + credentials form
-└── settings/
-    ├── SettingsActivity.kt         # Settings host activity
-    ├── SettingsFragment.kt         # Preference screen
-    └── SettingsViewModel.kt        # Version info
-```
+Use the `release` skill — it bumps `versionCode`/`versionName` in
+`automotive/build.gradle.kts` and writes the required commit message format.
 
 ## Architecture
-
-### Tech Stack
-- **Media**: Media3 ExoPlayer + MediaLibraryService (1.9.2)
-- **Jellyfin SDK**: `org.jellyfin.sdk:jellyfin-core` (1.8.6)
-- **DI**: Hilt (2.59.1) with KSP
-- **Networking**: OkHttp 5.3.2 (album art), Jellyfin SDK (API calls)
-- **Analytics**: Firebase Analytics + Crashlytics (disabled in debug)
-- **UI**: XML layouts, ViewBinding, dark theme
 
 ### Media Service Flow
 1. `DashTuneMusicService` (MediaLibraryService) creates ExoPlayer + MediaLibrarySession in `onCreate()`
@@ -131,19 +51,3 @@ automotive/src/main/java/com/chamika/dashtune/
 - `systemApi` - Server ping
 - `quickConnectApi` - QuickConnect auth flow
 - `ImageApi` - Album art URLs
-
-## User-Configurable Settings
-| Setting | Key | Default | Options |
-|---------|-----|---------|---------|
-| Bitrate | `bitrate` | Direct stream | Direct stream, 320k, 256k, 192k, 160k, 128k |
-| Cache Size | `cache_size` | 200 MB | 100, 200, 500, 1024, 2048 MB |
-| Offline Song Count | `prefetch_count` | 5 | Off (0), 3, 5, 10, 15, 20 |
-| Browse Categories | `browse_categories` | Latest,Favourites,Books,Playlists | Min 2, max 4 from: Latest, Favourites, Books, Playlists, Random |
-
-## Manifest Components
-- **DashTuneMusicService**: `foregroundServiceType="mediaPlayback"`, intent filters for Media3 + legacy MediaBrowserService
-- **SignInActivity**: `android.intent.action.ACTION_SIGN_IN`
-- **SettingsActivity**: `android.intent.action.APPLICATION_PREFERENCES`
-- **AuthenticatorService**: `android.accounts.AccountAuthenticator`
-- **AlbumArtContentProvider**: authority `com.chamika.dashtune`
-- Requires `android.hardware.type.automotive`
