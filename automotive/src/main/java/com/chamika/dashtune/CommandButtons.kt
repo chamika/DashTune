@@ -1,6 +1,8 @@
 package com.chamika.dashtune
 
+import android.content.ContentResolver
 import android.content.Context
+import android.net.Uri
 import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.Player
@@ -24,23 +26,37 @@ object CommandButtons {
      * listing the matching command action in its `MediaMetadata.supportedCommands`; the tap is
      * delivered to [DashTuneSessionCallback.onCustomCommand] with the item id in the args bundle
      * under `MediaConstants.EXTRA_KEY_MEDIA_ID`.
+     *
+     * Each button MUST carry an icon [Uri] as well as the res id. `setCustomIconResId` is only
+     * understood by Media3 hosts; `LegacyConversions.convertToBundle` drops the browse action's
+     * icon-uri key entirely when `iconUri` is null, and the AAOS media host then calls
+     * `Uri.parse(null)` in `MediaItemsRepository.parseBrowseActions` and crashes on connect.
      */
     @OptIn(UnstableApi::class)
     fun mediaItemButtons(context: Context): ImmutableList<CommandButton> {
         val download = CommandButton.Builder(CommandButton.ICON_UNDEFINED)
             .setDisplayName(context.getString(R.string.download_for_offline))
             .setCustomIconResId(R.drawable.ic_download)
+            .setIconUri(resourceUri(context, R.drawable.ic_download))
             .setSessionCommand(SessionCommand(DOWNLOAD_COMMAND, Bundle.EMPTY))
             .build()
 
         val remove = CommandButton.Builder(CommandButton.ICON_UNDEFINED)
             .setDisplayName(context.getString(R.string.remove_download))
             .setCustomIconResId(R.drawable.ic_download_remove)
+            .setIconUri(resourceUri(context, R.drawable.ic_download_remove))
             .setSessionCommand(SessionCommand(REMOVE_DOWNLOAD_COMMAND, Bundle.EMPTY))
             .build()
 
         return ImmutableList.of(download, remove)
     }
+
+    /** `android.resource://` uri for [resId], resolvable by the media host across processes. */
+    fun resourceUri(context: Context, resId: Int): Uri = Uri.Builder()
+        .scheme(ContentResolver.SCHEME_ANDROID_RESOURCE)
+        .authority(context.packageName)
+        .appendPath(resId.toString())
+        .build()
 
     @OptIn(UnstableApi::class)
     fun createButtons(player: Player): List<CommandButton> {
