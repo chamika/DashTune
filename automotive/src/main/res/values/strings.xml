@@ -46,6 +46,9 @@
     <string name="browse_categories_summary">Choose which categories appear (2–4)</string>
     <string name="min_categories_warning">Select at least 2 categories</string>
     <string name="max_categories_warning">Select at most 4 categories</string>
+    <string name="downloads_restart_confirmation">Changing the Downloads category changes the browse layout. DashTune must restart to apply it. Restart now?</string>
+    <string name="downloads_restart_confirm">Restart now</string>
+    <string name="downloads_restart_later">Later</string>
     <string name="cache_favourites">Cache favourites</string>
     <string name="cache_favourites_summary">Pre-download all favourite songs for offline playback</string>
     <string name="sync_library">Sync library</string>

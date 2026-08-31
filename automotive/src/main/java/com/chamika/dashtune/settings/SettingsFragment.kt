@@ -27,6 +27,9 @@ import java.text.DateFormat
 import java.util.Date
 import javax.inject.Inject
 
+/** The `browseCategoryValues` entry for the Downloads category. */
+private const val DOWNLOADS_CATEGORY = "downloads"
+
 @AndroidEntryPoint
 class SettingsFragment : PreferenceFragmentCompat() {
 
@@ -49,7 +52,7 @@ class SettingsFragment : PreferenceFragmentCompat() {
             }
         }
 
-        findPreference<MultiSelectListPreference>("browse_categories")?.setOnPreferenceChangeListener { _, newValue ->
+        findPreference<MultiSelectListPreference>("browse_categories")?.setOnPreferenceChangeListener { pref, newValue ->
             @Suppress("UNCHECKED_CAST")
             val selected = newValue as? Set<String> ?: return@setOnPreferenceChangeListener false
             when {
@@ -61,7 +64,13 @@ class SettingsFragment : PreferenceFragmentCompat() {
                     Toast.makeText(requireContext(), R.string.max_categories_warning, Toast.LENGTH_SHORT).show()
                     false
                 }
-                else -> true
+                else -> {
+                    val had = (pref as MultiSelectListPreference).values.contains(DOWNLOADS_CATEGORY)
+                    if (selected.contains(DOWNLOADS_CATEGORY) != had) {
+                        promptRestartForDownloadsLayout()
+                    }
+                    true
+                }
             }
         }
 
@@ -141,6 +150,25 @@ class SettingsFragment : PreferenceFragmentCompat() {
                 .show()
             true
         }
+    }
+
+    /**
+     * Selecting Downloads switches the browse categories from an artwork grid to list items —
+     * the only layout the AAOS host draws per-item browse actions in. The host resolves a
+     * node's presentation once, when it builds the browse view, and re-delivering children
+     * does not revise it, so the new layout only appears after it reconnects. The preference
+     * itself is already saved either way; restarting just applies it now instead of whenever
+     * DashTune next starts.
+     */
+    private fun promptRestartForDownloadsLayout() {
+        AlertDialog.Builder(requireContext())
+            .setMessage(R.string.downloads_restart_confirmation)
+            .setPositiveButton(R.string.downloads_restart_confirm) { _, _ ->
+                viewModel.forceExit()
+                requireActivity().finishAffinity()
+            }
+            .setNegativeButton(R.string.downloads_restart_later, null)
+            .show()
     }
 
     override fun onStart() {
