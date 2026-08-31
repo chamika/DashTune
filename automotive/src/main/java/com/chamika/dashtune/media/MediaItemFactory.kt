@@ -103,13 +103,22 @@ class MediaItemFactory(
      * slot, but nothing is drawn. Opting into Downloads is the signal that the user
      * manages downloads, so the categories carrying those actions switch to list items.
      */
-    private val downloadsCategoryEnabled: Boolean
+    internal val downloadsCategoryEnabled: Boolean
         get() {
             val prefs = PreferenceManager.getDefaultSharedPreferences(context)
             val selected = prefs.getStringSet(BROWSE_CATEGORIES_PREF, DEFAULT_BROWSE_CATEGORIES)
                 ?: DEFAULT_BROWSE_CATEGORIES
             return "downloads" in selected
         }
+
+    /**
+     * The browse actions a downloadable container advertises. Empty unless Downloads is enabled:
+     * several nodes (Folders, Genres, letter buckets, audiobooks) are list-styled whatever the
+     * setting, so without this gate their rows would offer a download button while the rest of
+     * the app has the feature switched off.
+     */
+    private fun downloadCommands(): List<String> =
+        if (downloadsCategoryEnabled) listOf(DOWNLOAD_COMMAND) else emptyList()
 
     /** Grid by default; list once Downloads is enabled, so browse actions can render. */
     private val categoryContentStyle: Int
@@ -131,6 +140,13 @@ class MediaItemFactory(
         val extras = Bundle()
         extras.putInt(
             MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+        // Favourites mixes playable rows (tracks, albums, audiobooks) with browsable ones
+        // (artists). Setting only the playable style left the browsable half on the host's
+        // grid default, and the host renders the node by that default rather than per row.
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
             MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
         )
 
@@ -370,14 +386,11 @@ class MediaItemFactory(
             extras.putBoolean(IS_FOLDER_KEY, true)
         }
 
-        extras.putInt(
-            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
-            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
-        )
-        extras.putInt(
-            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
-            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
-        )
+        // An artist's children are albums, which carry the download action, so this follows the
+        // same grid/list gate as the top-level categories. Hardcoding grid here left the albums
+        // three levels into Artists with no room for the action.
+        extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE, categoryContentStyle)
+        extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, categoryContentStyle)
 
         val metadata = MediaMetadata.Builder()
             .setTitle(item.name)
@@ -438,7 +451,7 @@ class MediaItemFactory(
             .setArtworkUri(artUri(item.id))
             .setMediaType(MediaMetadata.MEDIA_TYPE_ALBUM)
             .setExtras(extras)
-            .setSupportedCommands(listOf(DOWNLOAD_COMMAND))
+            .setSupportedCommands(downloadCommands())
             .build()
 
         return MediaItem.Builder()
@@ -460,7 +473,7 @@ class MediaItemFactory(
             .setArtworkUri(artUri(item.id))
             .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
             .setExtras(extras)
-            .setSupportedCommands(listOf(DOWNLOAD_COMMAND))
+            .setSupportedCommands(downloadCommands())
             .build()
 
         return MediaItem.Builder()
@@ -496,7 +509,7 @@ class MediaItemFactory(
             .setArtworkUri(artUri(item.id))
             .setMediaType(MediaMetadata.MEDIA_TYPE_ALBUM)
             .setExtras(extras)
-            .setSupportedCommands(listOf(DOWNLOAD_COMMAND))
+            .setSupportedCommands(downloadCommands())
             .build()
 
         val audioStream = streamingUri(item.id.toString())

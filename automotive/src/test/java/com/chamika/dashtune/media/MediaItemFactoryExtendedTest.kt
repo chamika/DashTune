@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaConstants
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.DOWNLOAD_COMMAND
 import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
 import com.chamika.dashtune.AlbumArtContentProvider
@@ -459,11 +460,62 @@ class MediaItemFactoryExtendedTest {
         factory = MediaItemFactory(context, jellyfinApi, 256)
     }
 
+    private fun baseItem(kind: BaseItemKind) =
+        BaseItemDto(id = UUID.randomUUID(), type = kind, name = "Item")
+
     private fun playableStyle(item: MediaItem) =
         item.mediaMetadata.extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE)
 
     private fun browsableStyle(item: MediaItem) =
         item.mediaMetadata.extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE)
+
+    @Test
+    fun `favourites uses list content style for browsable children too`() {
+        // Favourites mixes playable rows with browsable artists; leaving the browsable style
+        // unset left the host on its grid default for the whole node.
+        val extras = factory.favourites().mediaMetadata.extras
+
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+            extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE)
+        )
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+            extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE)
+        )
+    }
+
+    @Test
+    fun `artist switches to list content style when downloads category is enabled`() {
+        enableDownloadsCategory()
+
+        val item = factory.create(baseItem(BaseItemKind.MUSIC_ARTIST))
+
+        assertEquals(MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM, playableStyle(item))
+        assertEquals(MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM, browsableStyle(item))
+    }
+
+    @Test
+    fun `artist keeps the grid content style when downloads category is disabled`() {
+        val item = factory.create(baseItem(BaseItemKind.MUSIC_ARTIST))
+
+        assertEquals(MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM, playableStyle(item))
+        assertEquals(MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM, browsableStyle(item))
+    }
+
+    @Test
+    fun `album advertises the download action only when downloads category is enabled`() {
+        val album = baseItem(BaseItemKind.MUSIC_ALBUM)
+
+        assertTrue(factory.create(album).mediaMetadata.supportedCommands.isEmpty())
+
+        enableDownloadsCategory()
+
+        assertEquals(
+            listOf(DOWNLOAD_COMMAND),
+            factory.create(album).mediaMetadata.supportedCommands
+        )
+    }
 
     @Test
     fun `playlists switches to list content style when downloads category is enabled`() {

@@ -1,5 +1,7 @@
 package com.chamika.dashtune.data
 
+import android.os.Bundle
+import androidx.media3.session.MediaConstants
 import android.util.Log
 import androidx.core.net.toUri
 import androidx.media3.common.HeartRating
@@ -331,8 +333,28 @@ class MediaRepository(
             metadataBuilder.setDurationMs(durationMs)
         }
 
-        if (extras != null) {
-            metadataBuilder.setExtras(extras)
+        // The persisted extras carry the content style captured when the row was first cached,
+        // so a cached container keeps whatever layout it had then — including artist rows stored
+        // as grids, which leaves their albums with no room for the download action. When
+        // Downloads is on every container is list-styled, so stamp that over the stale value;
+        // when it is off the persisted styles are the intended per-type ones, so leave them be.
+        val effectiveExtras = if (itemFactory.downloadsCategoryEnabled) {
+            (extras ?: Bundle()).apply {
+                putInt(
+                    MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+                    MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+                )
+                putInt(
+                    MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+                    MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+                )
+            }
+        } else {
+            extras
+        }
+
+        if (effectiveExtras != null) {
+            metadataBuilder.setExtras(effectiveExtras)
         }
 
         // Re-advertise the "download for offline" browse action on cached container rows; the
@@ -342,6 +364,7 @@ class MediaRepository(
         // shuffled", so they match the container shape here but have nothing to pin. The items
         // MediaItemFactory builds carry no download action, and the cached copy must not either.
         if (isPlayable &&
+            itemFactory.downloadsCategoryEnabled &&
             !MediaItemFactory.isShuffleId(mediaId) &&
             (mediaType == MEDIA_TYPE_ALBUM || mediaType == MEDIA_TYPE_PLAYLIST)
         ) {

@@ -4,6 +4,8 @@ import android.os.Bundle
 import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.session.MediaConstants
+import org.json.JSONObject
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.DOWNLOAD_COMMAND
 import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
@@ -55,7 +57,8 @@ class MediaRepositoryTest {
     // --- getItem tests ---
 
     @Test
-    fun `cached album advertises the download action`() = runTest {
+    fun `cached album advertises the download action when downloads are enabled`() = runTest {
+        every { itemFactory.downloadsCategoryEnabled } returns true
         coEvery { dao.getItem("album-1") } returns cachedContainer(
             mediaId = "album-1",
             mediaType = MediaMetadata.MEDIA_TYPE_ALBUM
@@ -67,9 +70,25 @@ class MediaRepositoryTest {
     }
 
     @Test
+    fun `cached album does not advertise the download action when downloads are disabled`() = runTest {
+        // Folders, Genres and letter buckets are list-styled whatever the setting, so an
+        // ungated action would put a download button there with the feature switched off.
+        every { itemFactory.downloadsCategoryEnabled } returns false
+        coEvery { dao.getItem("album-1") } returns cachedContainer(
+            mediaId = "album-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_ALBUM
+        )
+
+        val item = repository.getItem("album-1")
+
+        assertTrue(item.mediaMetadata.supportedCommands.isEmpty())
+    }
+
+    @Test
     fun `cached shuffle row does not advertise the download action`() = runTest {
         // A shuffle row is a synthetic playable playlist standing in for "play this folder
         // shuffled": it matches the container shape but there is nothing to pin.
+        every { itemFactory.downloadsCategoryEnabled } returns true
         val shuffleId = SHUFFLE_FOLDER_PREFIX + "folder-1"
         coEvery { dao.getItem(shuffleId) } returns cachedContainer(
             mediaId = shuffleId,
@@ -83,6 +102,7 @@ class MediaRepositoryTest {
 
     @Test
     fun `cached genre shuffle row does not advertise the download action`() = runTest {
+        every { itemFactory.downloadsCategoryEnabled } returns true
         val shuffleId = SHUFFLE_GENRE_PREFIX + "genre-1"
         coEvery { dao.getItem(shuffleId) } returns cachedContainer(
             mediaId = shuffleId,
@@ -92,6 +112,46 @@ class MediaRepositoryTest {
         val item = repository.getItem(shuffleId)
 
         assertTrue(item.mediaMetadata.supportedCommands.isEmpty())
+    }
+
+    @Test
+    fun `cached row is list styled when downloads are enabled even if it was cached as a grid`() = runTest {
+        // Artist rows were cached with a grid style, which left their albums with nowhere to
+        // draw the download action until the cache happened to be refreshed.
+        every { itemFactory.downloadsCategoryEnabled } returns true
+        val gridExtras = JSONObject()
+            .put(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)
+            .toString()
+        coEvery { dao.getItem("artist-1") } returns cachedContainer(
+            mediaId = "artist-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_ARTIST
+        ).copy(isPlayable = false, isBrowsable = true, extras = gridExtras)
+
+        val extras = repository.getItem("artist-1").mediaMetadata.extras
+
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+            extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE)
+        )
+    }
+
+    @Test
+    fun `cached row keeps its stored content style when downloads are disabled`() = runTest {
+        every { itemFactory.downloadsCategoryEnabled } returns false
+        val gridExtras = JSONObject()
+            .put(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)
+            .toString()
+        coEvery { dao.getItem("artist-1") } returns cachedContainer(
+            mediaId = "artist-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_ARTIST
+        ).copy(isPlayable = false, isBrowsable = true, extras = gridExtras)
+
+        val extras = repository.getItem("artist-1").mediaMetadata.extras
+
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM,
+            extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE)
+        )
     }
 
     private fun cachedContainer(mediaId: String, mediaType: Int) = CachedMediaItemEntity(
