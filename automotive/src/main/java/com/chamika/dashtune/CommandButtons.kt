@@ -55,7 +55,8 @@ object CommandButtons {
     fun resourceUri(context: Context, resId: Int): Uri = Uri.Builder()
         .scheme(ContentResolver.SCHEME_ANDROID_RESOURCE)
         .authority(context.packageName)
-        .appendPath(resId.toString())
+        .appendPath(context.resources.getResourceTypeName(resId))
+        .appendPath(context.resources.getResourceEntryName(resId))
         .build()
 
     @OptIn(UnstableApi::class)

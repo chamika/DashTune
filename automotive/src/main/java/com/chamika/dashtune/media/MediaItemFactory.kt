@@ -52,6 +52,9 @@ class MediaItemFactory(
         const val IS_AUDIOBOOK_KEY = "is_audiobook"
         const val IS_FOLDER_KEY = "is_folder_browse"
 
+        const val BROWSE_CATEGORIES_PREF = "browse_categories"
+        val DEFAULT_BROWSE_CATEGORIES = setOf("latest", "favourites", "books", "playlists")
+
         /** Alphabet index shown under Artists and Albums; "#" collects non-alphabetic names. */
         val LETTERS: List<String> = listOf("#") + ('A'..'Z').map(Char::toString)
 
@@ -90,6 +93,32 @@ class MediaItemFactory(
             .build()
     }
 
+    /**
+     * True when the user has ticked the Downloads browse category.
+     *
+     * The AAOS media host only draws per-item browse actions in its *list* layouts:
+     * `media_browse_list_item.xml` carries a `browse_item_actions_container`, and neither
+     * grid layout has one. A category served as a grid therefore hides "Download for
+     * offline" and "Remove download" entirely — the row stays tappable in the action's
+     * slot, but nothing is drawn. Opting into Downloads is the signal that the user
+     * manages downloads, so the categories carrying those actions switch to list items.
+     */
+    private val downloadsCategoryEnabled: Boolean
+        get() {
+            val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+            val selected = prefs.getStringSet(BROWSE_CATEGORIES_PREF, DEFAULT_BROWSE_CATEGORIES)
+                ?: DEFAULT_BROWSE_CATEGORIES
+            return "downloads" in selected
+        }
+
+    /** Grid by default; list once Downloads is enabled, so browse actions can render. */
+    private val categoryContentStyle: Int
+        get() = if (downloadsCategoryEnabled) {
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        } else {
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+        }
+
     fun latestAlbums(): MediaItem {
         return albumCategory(LATEST_ALBUMS, "Latest", "ic_schedule")
     }
@@ -122,10 +151,7 @@ class MediaItemFactory(
 
     fun playlists(): MediaItem {
         val extras = Bundle()
-        extras.putInt(
-            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
-            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
-        )
+        extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE, categoryContentStyle)
 
         val metadata = MediaMetadata.Builder()
             .setTitle("Playlists")
@@ -180,7 +206,7 @@ class MediaItemFactory(
         )
         extras.putInt(
             MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
-            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
         )
 
         val metadata = MediaMetadata.Builder()
@@ -314,7 +340,7 @@ class MediaItemFactory(
         label: String,
         icon: String,
         mediaType: Int = MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS,
-        contentStyle: Int = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+        contentStyle: Int = categoryContentStyle
     ): MediaItem {
         val extras = Bundle()
         extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE, contentStyle)

@@ -68,8 +68,9 @@ class JellyfinMediaTree(
 
     fun getActiveCategoryIds(): List<String> {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        val defaults = setOf("latest", "favourites", "books", "playlists")
-        val selected = prefs.getStringSet("browse_categories", defaults) ?: defaults
+        val defaults = MediaItemFactory.DEFAULT_BROWSE_CATEGORIES
+        val selected = prefs.getStringSet(MediaItemFactory.BROWSE_CATEGORIES_PREF, defaults)
+            ?: defaults
         val canonicalOrder = listOf(
             "latest" to LATEST_ALBUMS,
             "favourites" to FAVOURITES,

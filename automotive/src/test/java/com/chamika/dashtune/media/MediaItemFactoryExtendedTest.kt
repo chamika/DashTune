@@ -2,6 +2,7 @@ package com.chamika.dashtune.media
 
 import android.content.Context
 import android.net.Uri
+import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaConstants
 import androidx.preference.PreferenceManager
@@ -19,6 +20,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.unmockkAll
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.universalAudioApi
 import org.jellyfin.sdk.api.operations.UniversalAudioApi
@@ -30,6 +32,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -57,6 +60,14 @@ class MediaItemFactoryExtendedTest {
         every { mockUniversalAudioApi.getUniversalAudioStreamUrl(any(), any(), any(), any(), any(), any(), any()) } returns "http://localhost:8096/Audio/test-id/universal"
 
         factory = MediaItemFactory(context, jellyfinApi, 256)
+    }
+
+    @After
+    fun tearDown() {
+        // mockkObject on AlbumArtContentProvider.Companion is process-wide: without this the
+        // stub outlives this class and AlbumArtContentProviderTest asserts against it instead
+        // of the real implementation, depending on class order.
+        unmockkAll()
     }
 
     private fun userItemData(
@@ -431,6 +442,64 @@ class MediaItemFactoryExtendedTest {
             MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
             item.mediaMetadata.extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE)
         )
+    }
+
+    /**
+     * Ticks the Downloads browse category and rebuilds the factory, which reads the
+     * preference when it builds each category node.
+     */
+    private fun enableDownloadsCategory() {
+        PreferenceManager.getDefaultSharedPreferences(context)
+            .edit()
+            .putStringSet(
+                MediaItemFactory.BROWSE_CATEGORIES_PREF,
+                MediaItemFactory.DEFAULT_BROWSE_CATEGORIES + "downloads"
+            )
+            .commit()
+        factory = MediaItemFactory(context, jellyfinApi, 256)
+    }
+
+    private fun playableStyle(item: MediaItem) =
+        item.mediaMetadata.extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE)
+
+    private fun browsableStyle(item: MediaItem) =
+        item.mediaMetadata.extras?.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE)
+
+    @Test
+    fun `playlists switches to list content style when downloads category is enabled`() {
+        enableDownloadsCategory()
+
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+            playableStyle(factory.playlists())
+        )
+    }
+
+    @Test
+    fun `album categories switch to list content style when downloads category is enabled`() {
+        enableDownloadsCategory()
+
+        listOf(factory.books(), factory.latestAlbums(), factory.randomAlbums(), factory.albums())
+            .forEach { item ->
+                assertEquals(
+                    MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+                    playableStyle(item)
+                )
+                assertEquals(
+                    MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+                    browsableStyle(item)
+                )
+            }
+    }
+
+    @Test
+    fun `downloads node uses list content style so its remove action can render`() {
+        enableDownloadsCategory()
+
+        val item = factory.downloads()
+
+        assertEquals(MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM, playableStyle(item))
+        assertEquals(MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM, browsableStyle(item))
     }
 
     @Test
