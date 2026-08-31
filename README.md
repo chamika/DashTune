@@ -95,7 +95,7 @@ DashTune/
 
 ### Prerequisites
 - Android Studio Hedgehog (2023.1.1) or later
-- JDK 11 or later
+- JDK 17
 - Android SDK with API 36
 
 ### Build Commands
@@ -114,6 +114,52 @@ Install to connected device:
 ```bash
 ./gradlew :automotive:installDebug
 ```
+
+## Testing
+
+**Neither suite needs a real Jellyfin server.** The end-to-end tests run against a simulated
+Jellyfin server that starts inside the app's own process, so they are fully self-contained.
+
+### Unit tests
+
+Robolectric + MockK, no device or emulator required. This is what CI runs on every pull request:
+
+```bash
+./gradlew :automotive:testDebugUnitTest
+```
+
+Results are written to `automotive/build/test-results/testDebugUnitTest/`.
+
+### End-to-end tests
+
+These bind a real `MediaBrowser` to the real `DashTuneMusicService` — the same interface an AAOS
+head unit uses — and cover browsing, pagination, playback, audiobooks and failure handling.
+
+They need a **running Android Automotive emulator**. The manifest requires
+`android.hardware.type.automotive`, so the APK will not install on a phone image (see
+[Running on AAOS](#running-on-aaos) for creating an automotive AVD):
+
+```bash
+# Boot an automotive AVD headlessly
+$ANDROID_HOME/emulator/emulator -avd <your_automotive_avd> -no-window -no-audio -no-snapshot &
+
+./gradlew :automotive:connectedDebugAndroidTest
+```
+
+Reports are written to `automotive/build/reports/androidTests/connected/debug/index.html`.
+
+### Where the tests live
+
+| Path | Contents |
+|------|----------|
+| `automotive/src/test/` | Unit tests (ViewModels, repository, media tree, DAO, item factory) |
+| `automotive/src/androidTest/` | End-to-end tests |
+| `automotive/src/androidTest/.../fake/` | The simulated Jellyfin server and its fixtures |
+| `automotive/src/androidTest/.../support/` | Test harness — server startup, sign-in, MediaBrowser helpers |
+
+When the app starts calling a new Jellyfin endpoint, add a route for it to `FakeJellyfinServer`.
+Unhandled routes deliberately return HTTP 501 and are recorded, so a missing endpoint surfaces as
+a clear failure rather than a silently empty browse list.
 
 ## Running on AAOS
 
@@ -210,6 +256,9 @@ See `gradle/libs.versions.toml` for complete dependency list.
 ## Contributing
 
 Contributions are welcome! Please feel free to submit pull requests or open issues.
+
+Before opening a pull request, please run the [tests](#testing). CI runs the unit tests and the
+end-to-end suite (on an automotive emulator) on every pull request.
 
 ## License
 

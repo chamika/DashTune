@@ -15,6 +15,30 @@ Jellyfin music and audiobook player for Android Automotive OS (AAOS) with offlin
 ./gradlew :automotive:installDebug
 ```
 
+## Testing
+
+```bash
+# Unit tests (Robolectric + mockk) — what CI runs on every PR
+./gradlew :automotive:testDebugUnitTest
+
+# End-to-end tests against a simulated Jellyfin server.
+# Needs a booted AAOS emulator: the manifest requires android.hardware.type.automotive,
+# so the APK will not install on a phone image.
+$ANDROID_HOME/emulator/emulator -avd Automotive_Portrait -no-window -no-audio -no-snapshot &
+./gradlew :automotive:connectedDebugAndroidTest
+```
+
+The E2E suite (`automotive/src/androidTest/`) runs a `FakeJellyfinServer` (MockWebServer) in
+the app's own process on `127.0.0.1`, points `DashTuneMusicService` at it by storing an
+account and sending `LOGIN_COMMAND`, then drives a real `MediaBrowser` — the same interface
+an AAOS head unit uses. It covers browsing, pagination, playback, audiobooks and failure
+modes. Fixtures live in `androidTest/.../fake/`; add a route to `FakeJellyfinServer` when the
+app starts calling a new Jellyfin endpoint (unhandled routes return 501 and are recorded).
+
+Tests that assert audio actually plays construct the rule with `foregroundForPlayback = true`
+— Android 15's audio focus hardening denies focus to an app whose only running component is a
+bound service.
+
 ## Releasing
 
 1. Bump `versionCode` (increment by 1) and `versionName` (semver) in `automotive/build.gradle.kts`
