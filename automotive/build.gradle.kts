@@ -63,6 +63,17 @@ android {
             isIncludeAndroidResources = true
         }
     }
+
+    packaging {
+        resources {
+            excludes += setOf(
+                "/META-INF/{AL2.0,LGPL2.1}",
+                "/META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+                "/META-INF/LICENSE.md",
+                "/META-INF/LICENSE-notice.md",
+            )
+        }
+    }
 }
 
 dependencies {
@@ -99,4 +110,10 @@ dependencies {
     testImplementation(libs.androidx.room.testing)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.core.ktx)
+    // Simulated Jellyfin server for the E2E suite.
+    androidTestImplementation(libs.mockwebserver3)
+    androidTestImplementation(libs.okhttp.tls)
 }
