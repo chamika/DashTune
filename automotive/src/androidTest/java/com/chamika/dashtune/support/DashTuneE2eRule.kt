@@ -91,7 +91,13 @@ class DashTuneE2eRule(
 
         // Clear before the login command, so the tree cache invalidation that command
         // triggers is the last thing to happen and nothing can repopulate stale rows after.
-        runBlocking { database.mediaCacheDao().deleteAll() }
+        // Pinned downloads survive a sync by design and are not part of the library cache, so
+        // they outlive the app's own clean-up and would otherwise carry real user state — or a
+        // previous test's — into Downloads and into what the browse rows advertise.
+        runBlocking {
+            database.mediaCacheDao().deleteAll()
+            database.pinnedDownloadDao().deleteAll()
+        }
         applyLogin()
         server.clearRequests()
     }
@@ -105,7 +111,12 @@ class DashTuneE2eRule(
             }
         }
         runCatching { foregroundActivity?.close() }
-        runCatching { runBlocking { database.mediaCacheDao().deleteAll() } }
+        runCatching {
+            runBlocking {
+                database.mediaCacheDao().deleteAll()
+                database.pinnedDownloadDao().deleteAll()
+            }
+        }
         runCatching { server.close() }
         runCatching { JellyfinAccountManager(AccountManager.get(context)).logout() }
     }
