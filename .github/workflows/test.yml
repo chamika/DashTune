@@ -37,12 +37,7 @@ jobs:
 
   instrumented-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    env:
-      # The manifest requires android.hardware.type.automotive, so the APK will not install
-      # on a phone image — an automotive system image is mandatory, not a preference.
-      SYSTEM_IMAGE: "system-images;android-35-ext15;android-automotive;x86_64"
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -54,8 +49,6 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - uses: android-actions/setup-android@v3
-
       # Without KVM the x86_64 emulator falls back to software rendering and is too slow.
       - name: Enable KVM
         run: |
@@ -64,30 +57,25 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Install the automotive system image
-        run: |
-          yes | sdkmanager --install "$SYSTEM_IMAGE" emulator platform-tools > /dev/null
-
-      - name: Create the AVD
-        run: |
-          echo no | avdmanager create avd \
-            --force --name dashtune_ci \
-            --package "$SYSTEM_IMAGE" \
-            --device automotive_1024p_landscape
-
-      - name: Boot the emulator
-        run: |
-          # nohup so the emulator outlives this step's shell.
-          nohup $ANDROID_HOME/emulator/emulator -avd dashtune_ci \
-            -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect \
-            > "$RUNNER_TEMP/emulator.log" 2>&1 &
-          adb wait-for-device
-          # Poll for boot rather than sleeping a fixed amount; AAOS images boot slowly.
-          timeout 600 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 5; done'
-          adb shell input keyevent 82 || true
-
+      # An automotive system image is mandatory, not a preference: the manifest requires
+      # android.hardware.type.automotive, so the APK will not install on a phone image.
+      # This action owns AVD creation, boot and teardown — a hand-rolled `adb wait-for-device`
+      # has no timeout of its own and hangs until the job limit when the emulator never
+      # registers, which is exactly how the first attempt at this job burned 45 minutes.
       - name: Run instrumented tests
-        run: ./gradlew :automotive:connectedDebugAndroidTest
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          system-image-api-level: 35-ext15
+          target: android-automotive
+          arch: x86_64
+          profile: automotive_1024p_landscape
+          cores: 4
+          ram-size: 4096M
+          disk-size: 8G
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: ./gradlew :automotive:connectedDebugAndroidTest
 
       - name: Upload test report
         if: always()
