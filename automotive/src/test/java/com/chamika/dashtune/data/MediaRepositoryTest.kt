@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.DOWNLOAD_COMMAND
 import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.data.db.PinnedDownloadDao
@@ -16,6 +17,8 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.DOWNLOADS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -50,6 +53,61 @@ class MediaRepositoryTest {
     }
 
     // --- getItem tests ---
+
+    @Test
+    fun `cached album advertises the download action`() = runTest {
+        coEvery { dao.getItem("album-1") } returns cachedContainer(
+            mediaId = "album-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_ALBUM
+        )
+
+        val item = repository.getItem("album-1")
+
+        assertEquals(listOf(DOWNLOAD_COMMAND), item.mediaMetadata.supportedCommands)
+    }
+
+    @Test
+    fun `cached shuffle row does not advertise the download action`() = runTest {
+        // A shuffle row is a synthetic playable playlist standing in for "play this folder
+        // shuffled": it matches the container shape but there is nothing to pin.
+        val shuffleId = SHUFFLE_FOLDER_PREFIX + "folder-1"
+        coEvery { dao.getItem(shuffleId) } returns cachedContainer(
+            mediaId = shuffleId,
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST
+        )
+
+        val item = repository.getItem(shuffleId)
+
+        assertTrue(item.mediaMetadata.supportedCommands.isEmpty())
+    }
+
+    @Test
+    fun `cached genre shuffle row does not advertise the download action`() = runTest {
+        val shuffleId = SHUFFLE_GENRE_PREFIX + "genre-1"
+        coEvery { dao.getItem(shuffleId) } returns cachedContainer(
+            mediaId = shuffleId,
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST
+        )
+
+        val item = repository.getItem(shuffleId)
+
+        assertTrue(item.mediaMetadata.supportedCommands.isEmpty())
+    }
+
+    private fun cachedContainer(mediaId: String, mediaType: Int) = CachedMediaItemEntity(
+        mediaId = mediaId,
+        parentId = "parent-1",
+        title = "Shuffle all",
+        subtitle = null,
+        artUri = null,
+        mediaType = mediaType,
+        isPlayable = true,
+        isBrowsable = false,
+        sortOrder = 0,
+        durationMs = null,
+        isFavorite = false,
+        extras = null
+    )
 
     @Test
     fun `getItem returns cached item when DAO has data`() = runTest {

@@ -337,8 +337,14 @@ class MediaRepository(
 
         // Re-advertise the "download for offline" browse action on cached container rows; the
         // fresh MediaItemFactory items carry it, but browse after a sync is served from here.
-        // Audiobooks are cached with MEDIA_TYPE_ALBUM, so they're covered too.
-        if (isPlayable && (mediaType == MEDIA_TYPE_ALBUM || mediaType == MEDIA_TYPE_PLAYLIST)) {
+        // Audiobooks are cached with MEDIA_TYPE_ALBUM, so they're covered too. Shuffle rows are
+        // excluded: they are synthetic playable playlists standing in for "play this folder
+        // shuffled", so they match the container shape here but have nothing to pin. The items
+        // MediaItemFactory builds carry no download action, and the cached copy must not either.
+        if (isPlayable &&
+            !MediaItemFactory.isShuffleId(mediaId) &&
+            (mediaType == MEDIA_TYPE_ALBUM || mediaType == MEDIA_TYPE_PLAYLIST)
+        ) {
             metadataBuilder.setSupportedCommands(listOf(DOWNLOAD_COMMAND))
         }
 
