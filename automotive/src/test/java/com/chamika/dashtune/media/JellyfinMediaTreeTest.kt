@@ -7,6 +7,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ARTISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
@@ -44,7 +45,7 @@ class JellyfinMediaTreeTest {
         val ids = tree.getActiveCategoryIds()
 
         assertEquals(4, ids.size)
-        assertTrue(ids.contains(LATEST_ALBUMS))
+        assertTrue(ids.contains(HOME))
         assertTrue(ids.contains(FAVOURITES))
         assertTrue(ids.contains(BOOKS))
         assertTrue(ids.contains(PLAYLISTS))
@@ -87,7 +88,7 @@ class JellyfinMediaTreeTest {
         val ids = tree.getActiveCategoryIds()
 
         assertEquals(4, ids.size)
-        assertTrue(ids.contains(LATEST_ALBUMS))
+        assertTrue(ids.contains(HOME))
         assertTrue(ids.contains(FAVOURITES))
         assertTrue(ids.contains(BOOKS))
         assertTrue(ids.contains(PLAYLISTS))
@@ -114,7 +115,7 @@ class JellyfinMediaTreeTest {
         val ids = tree.getActiveCategoryIds()
 
         assertEquals(4, ids.size)
-        assertTrue(ids.contains(LATEST_ALBUMS))
+        assertTrue(ids.contains(HOME))
         assertTrue(ids.contains(FAVOURITES))
         assertTrue(ids.contains(BOOKS))
         assertTrue(ids.contains(PLAYLISTS))

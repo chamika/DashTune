@@ -1,5 +1,6 @@
 package com.chamika.dashtune.data
 
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.net.toUri
 import androidx.media3.common.HeartRating
@@ -24,6 +25,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ARTISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTER_BUCKET_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
@@ -35,6 +37,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 class MediaRepository(
@@ -53,7 +56,7 @@ class MediaRepository(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val staticIds = setOf(
-        ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS,
+        ROOT_ID, HOME, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS,
         ARTISTS, ALBUMS, GENRES
     )
 
@@ -63,7 +66,21 @@ class MediaRepository(
      * every album — either turns a routine sync into a library-sized fetch. Deeper levels
      * cache lazily via [getChildren] as the user browses.
      */
-    private val shallowSyncSections = setOf(FOLDERS, ARTISTS, ALBUMS, GENRES)
+    private val shallowSyncSections = setOf(HOME, FOLDERS, ARTISTS, ALBUMS, GENRES)
+
+    /**
+     * Home rebuilt this recently is served from memory. Home is five live queries, and a
+     * paginating browser asks for the same node several times in a row; without this every
+     * page would re-run all of them. Kept short because Home is meant to look different
+     * after each drive.
+     */
+    private val homeCacheTtlMs = 2 * 60 * 1000L
+
+    @Volatile
+    private var homeChildren: List<MediaItem>? = null
+
+    @Volatile
+    private var homeCachedAtMs = 0L
 
     suspend fun getItem(id: String): MediaItem {
         if (id in staticIds) {
@@ -87,6 +104,10 @@ class MediaRepository(
     suspend fun getChildren(parentId: String): List<MediaItem> {
         if (parentId == ROOT_ID) {
             return tree.getChildren(ROOT_ID)
+        }
+
+        if (parentId == HOME) {
+            return getHomeChildren()
         }
 
         val cached = dao.getChildrenByParent(parentId)
@@ -134,6 +155,84 @@ class MediaRepository(
         }
     }
 
+    /**
+     * Home is always built live when the TTL has expired, then written through to Room so it
+     * still renders on a dead connection. Room is only read when the live build comes back
+     * empty, because a stale Home that never refreshes is worse than a slightly slow one.
+     */
+    private suspend fun getHomeChildren(): List<MediaItem> {
+        val cached = homeChildren
+        if (cached != null && SystemClock.elapsedRealtime() - homeCachedAtMs < homeCacheTtlMs) {
+            return cached
+        }
+
+        // Explicitly on IO: browse futures resolve on the main dispatcher, and unlike the
+        // ordinary getChildren path this one does not go through `scope`, so without this
+        // every section's HTTP call dies with NetworkOnMainThreadException.
+        val fresh = try {
+            withContext(Dispatchers.IO) { tree.getChildren(HOME) }
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to build Home", e)
+            emptyList()
+        }
+
+        if (fresh.isNotEmpty()) {
+            homeChildren = fresh
+            homeCachedAtMs = SystemClock.elapsedRealtime()
+            try {
+                dao.deleteByParent(HOME)
+                dao.insertAll(fresh.mapIndexed { index, item -> item.toEntity(HOME, index) })
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to cache Home", e)
+            }
+            return fresh
+        }
+
+        return dao.getChildrenByParent(HOME).map { it.toMediaItem() }
+    }
+
+    /** Forces the next Home browse to rebuild — the play history behind it has moved on. */
+    fun invalidateHome() {
+        homeChildren = null
+        homeCachedAtMs = 0L
+    }
+
+    suspend fun getArtistRadioTracks(artistId: String): List<MediaItem> {
+        return try {
+            withContext(Dispatchers.IO) { tree.getArtistRadioTracks(artistId) }
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Artist radio failed for $artistId, falling back to cache", e)
+            cachedDescendantTracks(artistId).shuffled()
+        }
+    }
+
+    suspend fun getLatestTracks(limit: Int): List<MediaItem> {
+        return try {
+            withContext(Dispatchers.IO) { tree.getLatestTracks(limit) }
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Latest tracks query failed", e)
+            emptyList()
+        }
+    }
+
+    suspend fun getFavouriteTracksShuffled(): List<MediaItem> {
+        return try {
+            withContext(Dispatchers.IO) { tree.getFavouriteTracksShuffled() }
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Favourite shuffle failed, falling back to cache", e)
+            cachedDescendantTracks(FAVOURITES).shuffled()
+        }
+    }
+
+    suspend fun getLibraryShuffled(): List<MediaItem> {
+        return try {
+            withContext(Dispatchers.IO) { tree.getLibraryShuffled() }
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Library shuffle failed", e)
+            emptyList()
+        }
+    }
+
     suspend fun search(query: String): List<MediaItem> {
         return tree.search(query)
     }
@@ -169,6 +268,7 @@ class MediaRepository(
 
     fun invalidateCache() {
         tree.invalidateCache()
+        invalidateHome()
     }
 
     suspend fun sync(): Boolean = syncMutex.withLock {
