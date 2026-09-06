@@ -341,29 +341,28 @@ class MediaItemFactory(
     }
 
     /**
-     * A shuffle action tile (favourites, newest, whole library). Uses the category grid
-     * style so the head unit draws the tintable icon with margins rather than stretching
-     * it like album art; unsupported values fall back to a plain grid tile.
+     * A shuffle action tile (favourites, newest, whole library).
+     *
+     * Styled as an ordinary grid item, not a category grid item. The category style draws a
+     * tinted icon with margins and no tile behind it, which left these floating on the system
+     * background beside solid album squares. Instead [art] is a full-bleed drawable that
+     * already contains its own dark tile, so the head unit renders it exactly like artwork.
      */
     fun actionTile(
         mediaId: String,
         title: String,
         subtitle: String,
-        icon: String,
+        art: String,
         group: String? = null
     ): MediaItem {
         val extras = homeExtras(group, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)
-        extras.putInt(
-            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_SINGLE_ITEM,
-            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_CATEGORY_GRID_ITEM
-        )
 
         val metadata = MediaMetadata.Builder()
             .setTitle(title)
             .setSubtitle(subtitle)
             .setIsBrowsable(false)
             .setIsPlayable(true)
-            .setArtworkUri("android.resource://com.chamika.dashtune/drawable/$icon".toUri())
+            .setArtworkUri("android.resource://com.chamika.dashtune/drawable/$art".toUri())
             .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
             .setExtras(extras)
             .build()

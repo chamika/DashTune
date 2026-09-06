@@ -147,8 +147,10 @@ automotive/src/main/java/com/chamika/dashtune/
 - Row width comes from the display width alone (`HomeLayout`): 4 tiles at 1200dp and above, else 3.
   AAOS never reports its grid column count. Sections are trimmed to that so none of them wraps.
 - Tile *shape* is not controllable. The content style API offers list, grid, category list, category
-  grid, a per-item override and group titles, and nothing for artwork shape — the OEM decides. The
-  shuffle tiles use `CATEGORY_GRID_ITEM` so their tintable vector icon is drawn with margins.
+  grid, a per-item override and group titles, and nothing for artwork shape — the OEM decides.
+- The shuffle tiles are ordinary grid items whose artwork (`art_shuffle`, `art_favourites`) is a
+  full-bleed vector carrying its own dark tile. `CATEGORY_GRID_ITEM` was tried first and is wrong
+  here: it draws a bare tinted icon with no tile, so the tile read as a hole in a row of albums.
 - Home is cached in memory for 2 minutes and written through to Room for offline. It is invalidated
   when playback stops and when a queue is set, since four of the five sections come from listening
   history. `BrowseCategoriesMigration` adds Home to an existing user's tabs once, dropping the last

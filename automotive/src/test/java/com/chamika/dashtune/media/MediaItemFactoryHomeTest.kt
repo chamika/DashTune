@@ -111,16 +111,19 @@ class MediaItemFactoryHomeTest {
     }
 
     @Test
-    fun `action tiles use the category grid style so the icon is drawn with margins`() {
+    fun `action tiles are ordinary grid items carrying their own full-bleed artwork`() {
         val tile = factory.actionTile(
-            SHUFFLE_LIBRARY, "Shuffle library", "Shuffled", "ic_shuffle", "Mixes"
+            SHUFFLE_LIBRARY, "Shuffle library", "Shuffled", "art_shuffle", "Mixes"
         )
 
         assertEquals(SHUFFLE_LIBRARY, tile.mediaId)
+        // Not the category grid style: that draws a bare tinted icon with no tile behind it,
+        // which reads as a hole in a row of solid album squares.
         assertEquals(
-            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_CATEGORY_GRID_ITEM,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM,
             singleItemStyle(tile)
         )
+        assertTrue(tile.mediaMetadata.artworkUri.toString().endsWith("art_shuffle"))
         assertEquals("Mixes", groupTitle(tile))
         assertTrue(tile.mediaMetadata.isPlayable == true)
     }

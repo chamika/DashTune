@@ -217,7 +217,7 @@ class HomeSections(
             mediaId = MediaItemFactory.SHUFFLE_FAVOURITES,
             title = context.getString(R.string.shuffle_favourites),
             subtitle = context.getString(R.string.shuffled),
-            icon = "ic_star_filled",
+            art = "art_favourites",
             group = group
         )
     }
@@ -251,7 +251,7 @@ class HomeSections(
             mediaId = MediaItemFactory.SHUFFLE_NEW,
             title = context.getString(R.string.shuffle_new),
             subtitle = context.getString(R.string.latest_tracks_subtitle, MediaItemResolver.LATEST_TRACKS_LIMIT),
-            icon = "ic_shuffle",
+            art = "art_shuffle",
             group = group
         )
     }
@@ -323,7 +323,7 @@ class HomeSections(
             mediaId = MediaItemFactory.SHUFFLE_LIBRARY,
             title = context.getString(R.string.shuffle_library),
             subtitle = context.getString(R.string.shuffled),
-            icon = "ic_shuffle",
+            art = "art_shuffle",
             group = group
         )
     }

@@ -132,7 +132,7 @@ class JellyfinMediaTree(
                     SHUFFLE_FAVOURITES,
                     context.getString(R.string.shuffle_favourites),
                     context.getString(R.string.shuffled),
-                    "ic_star_filled"
+                    "art_favourites"
                 )
                 id == SHUFFLE_NEW -> itemFactory.actionTile(
                     SHUFFLE_NEW,
@@ -141,13 +141,13 @@ class JellyfinMediaTree(
                         R.string.latest_tracks_subtitle,
                         MediaItemResolver.LATEST_TRACKS_LIMIT
                     ),
-                    "ic_shuffle"
+                    "art_shuffle"
                 )
                 id == SHUFFLE_LIBRARY -> itemFactory.actionTile(
                     SHUFFLE_LIBRARY,
                     context.getString(R.string.shuffle_library),
                     context.getString(R.string.shuffled),
-                    "ic_shuffle"
+                    "art_shuffle"
                 )
                 id.startsWith(RADIO_ARTIST_PREFIX) -> retryOnFailure {
                     val artist = api.userLibraryApi
