@@ -40,6 +40,22 @@ class MediaItemFactory(
         const val ARTISTS = "ARTISTS_ID"
         const val ALBUMS = "ALBUMS_ID"
         const val GENRES = "GENRES_ID"
+        const val HOME = "HOME_ID"
+
+        // Home tiles the browser can hand back as a bare media id, so each one needs an id
+        // the resolver can dispatch on. Every tile resolves to a queue, never a single track.
+        const val RESUME_QUEUE = "RESUME_QUEUE_ID"
+        const val SHUFFLE_FAVOURITES = "SHUFFLE_FAVOURITES_ID"
+        const val SHUFFLE_NEW = "SHUFFLE_NEW_ID"
+        const val SHUFFLE_LIBRARY = "SHUFFLE_LIBRARY_ID"
+        const val RADIO_ARTIST_PREFIX = "RADIO_ARTIST:"
+
+        /**
+         * A "New for you" album. Prefixed so tapping it plays the album and then continues
+         * into the rest of the recently added tracks, instead of stopping at the album end.
+         */
+        const val NEW_ALBUM_PREFIX = "NEW_ALBUM:"
+
         const val SHUFFLE_FOLDER_PREFIX = "SHUFFLE_FOLDER:"
         // A genre shuffle can't reuse the folder one: folders shuffle by parentId,
         // genres by genreIds, so the two need distinguishable media ids.
@@ -54,6 +70,17 @@ class MediaItemFactory(
 
         fun isShuffleId(id: String): Boolean =
             id.startsWith(SHUFFLE_FOLDER_PREFIX) || id.startsWith(SHUFFLE_GENRE_PREFIX)
+
+        /**
+         * Synthetic Home tiles that the resolver expands itself. They have no Jellyfin item
+         * behind them, so the sibling-expansion path must never try to look up a parent.
+         */
+        fun isHomeActionId(id: String): Boolean =
+            id == RESUME_QUEUE ||
+                id == SHUFFLE_FAVOURITES ||
+                id == SHUFFLE_NEW ||
+                id == SHUFFLE_LIBRARY ||
+                id.startsWith(RADIO_ARTIST_PREFIX)
 
         fun letterBucketId(categoryId: String, letter: String): String =
             "$LETTER_BUCKET_PREFIX$categoryId:$letter"
@@ -85,6 +112,15 @@ class MediaItemFactory(
             .setMediaId(ROOT_ID)
             .setMediaMetadata(metadata)
             .build()
+    }
+
+    fun home(): MediaItem {
+        return albumCategory(
+            HOME,
+            context.getString(R.string.home),
+            "ic_home",
+            mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_MIXED
+        )
     }
 
     fun latestAlbums(): MediaItem {
@@ -228,6 +264,130 @@ class MediaItemFactory(
             .build()
     }
 
+    /**
+     * The saved music queue, offered as one tile so a tap resumes where the last drive
+     * stopped. Resolved from SharedPreferences, so it carries no Jellyfin item of its own.
+     */
+    fun resumeQueue(title: String, trackIndex: Int, trackCount: Int, artworkUri: Uri?): MediaItem {
+        val extras = homeExtras(
+            group = context.getString(R.string.continue_listening),
+            style = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(title)
+            .setSubtitle(
+                context.getString(R.string.resume_queue_subtitle, trackIndex + 1, trackCount)
+            )
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .setArtworkUri(
+                artworkUri ?: "android.resource://com.chamika.dashtune/drawable/ic_playlists".toUri()
+            )
+            .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
+            .setExtras(extras)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(RESUME_QUEUE)
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    /** An instant mix seeded from one artist: a few hundred tracks from a single tap. */
+    fun artistRadio(item: BaseItemDto, group: String? = null): MediaItem {
+        val extras = homeExtras(group, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(context.getString(R.string.artist_radio, item.name.orEmpty()))
+            .setSubtitle(context.getString(R.string.artist_mix))
+            .setArtist(item.name)
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .setArtworkUri(artUri(item.id))
+            .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
+            .setExtras(extras)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(RADIO_ARTIST_PREFIX + item.id)
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    /**
+     * A genre shuffle presented as a Home tile; reuses the existing genre-shuffle id so the
+     * resolver needs no new branch. Takes id and name rather than a DTO because the genres
+     * come off a track's genre list, which carries only those two fields.
+     */
+    fun genreMix(genreId: UUID, name: String, group: String? = null): MediaItem {
+        val extras = homeExtras(group, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(context.getString(R.string.genre_mix, name))
+            .setSubtitle(context.getString(R.string.shuffled))
+            .setGenre(name)
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .setArtworkUri(artUri(genreId))
+            .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
+            .setExtras(extras)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(SHUFFLE_GENRE_PREFIX + genreId)
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    /**
+     * A shuffle action tile (favourites, newest, whole library). Uses the category grid
+     * style so the head unit draws the tintable icon with margins rather than stretching
+     * it like album art; unsupported values fall back to a plain grid tile.
+     */
+    fun actionTile(
+        mediaId: String,
+        title: String,
+        subtitle: String,
+        icon: String,
+        group: String? = null
+    ): MediaItem {
+        val extras = homeExtras(group, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_SINGLE_ITEM,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_CATEGORY_GRID_ITEM
+        )
+
+        val metadata = MediaMetadata.Builder()
+            .setTitle(title)
+            .setSubtitle(subtitle)
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .setArtworkUri("android.resource://com.chamika.dashtune/drawable/$icon".toUri())
+            .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
+            .setExtras(extras)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(mediaId)
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    /**
+     * Extras shared by every Home tile: the section header plus a per-item style, so one
+     * browse node can mix progress-bar rows with album grids.
+     */
+    private fun homeExtras(group: String?, style: Int): Bundle {
+        val extras = Bundle()
+        if (group != null) {
+            extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
+        }
+        extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_SINGLE_ITEM, style)
+        extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE, style)
+        return extras
+    }
+
     private fun albumCategory(
         id: String,
         label: String,
@@ -317,10 +477,18 @@ class MediaItemFactory(
             .build()
     }
 
-    private fun forAlbum(item: BaseItemDto, group: String? = null): MediaItem {
+    private fun forAlbum(
+        item: BaseItemDto,
+        group: String? = null,
+        idPrefix: String = "",
+        singleItemStyle: Int? = null
+    ): MediaItem {
         val extras = Bundle()
         if (group != null) {
             extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
+        }
+        if (singleItemStyle != null) {
+            extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_SINGLE_ITEM, singleItemStyle)
         }
 
         val metadata = MediaMetadata.Builder()
@@ -334,7 +502,7 @@ class MediaItemFactory(
             .build()
 
         return MediaItem.Builder()
-            .setMediaId(item.id.toString())
+            .setMediaId(idPrefix + item.id)
             .setMediaMetadata(metadata)
             .build()
     }
@@ -360,13 +528,21 @@ class MediaItemFactory(
             .build()
     }
 
-    private fun forAudiobook(item: BaseItemDto, group: String? = null, parent: String? = null): MediaItem {
+    private fun forAudiobook(
+        item: BaseItemDto,
+        group: String? = null,
+        parent: String? = null,
+        singleItemStyle: Int? = null
+    ): MediaItem {
         val extras = Bundle()
         if (group != null) {
             extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
         }
         if (parent != null) {
             extras.putString(PARENT_KEY, parent)
+        }
+        if (singleItemStyle != null) {
+            extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_SINGLE_ITEM, singleItemStyle)
         }
         extras.putBoolean(IS_AUDIOBOOK_KEY, true)
         extras.putInt(
@@ -468,7 +644,8 @@ class MediaItemFactory(
         item: BaseItemDto,
         group: String? = null,
         parent: String? = null,
-        isAudiobook: Boolean = false
+        isAudiobook: Boolean = false,
+        singleItemStyle: Int? = null
     ): MediaItem {
         val hasOwnImage = item.imageTags?.containsKey(ImageType.PRIMARY) == true
         val artUrl = artUri(if (hasOwnImage) item.id else (item.albumId ?: item.id))
@@ -482,6 +659,10 @@ class MediaItemFactory(
 
         if (parent != null) {
             extras.putString(PARENT_KEY, parent)
+        }
+
+        if (singleItemStyle != null) {
+            extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_SINGLE_ITEM, singleItemStyle)
         }
 
         if (isAudiobook) {
@@ -526,6 +707,9 @@ class MediaItemFactory(
         }
     }
 
+    /** Album art for a raw item id, for tiles built without a [BaseItemDto] in hand. */
+    fun artUriFor(id: String): Uri = artUri(id.toUUID())
+
     private fun artUri(id: UUID): Uri {
         val artUrl = ImageApi(jellyfinApi).getItemImageUrl(
             id,
@@ -560,17 +744,19 @@ class MediaItemFactory(
         group: String? = null,
         parent: String? = null,
         isAudiobook: Boolean = false,
-        isFolderBrowse: Boolean = false
+        isFolderBrowse: Boolean = false,
+        idPrefix: String = "",
+        singleItemStyle: Int? = null
     ): MediaItem {
         return when (baseItemDto.type) {
             BaseItemKind.MUSIC_ARTIST -> forArtist(baseItemDto, group, isFolderBrowse)
-            BaseItemKind.MUSIC_ALBUM -> forAlbum(baseItemDto, group)
+            BaseItemKind.MUSIC_ALBUM -> forAlbum(baseItemDto, group, idPrefix, singleItemStyle)
             BaseItemKind.MUSIC_GENRE, BaseItemKind.GENRE -> forGenre(baseItemDto, group)
-            BaseItemKind.AUDIO_BOOK -> forAudiobook(baseItemDto, group, parent)
+            BaseItemKind.AUDIO_BOOK -> forAudiobook(baseItemDto, group, parent, singleItemStyle)
             BaseItemKind.FOLDER -> forFolder(baseItemDto, group, isAudiobook, isFolderBrowse)
             BaseItemKind.COLLECTION_FOLDER -> forFolder(baseItemDto, group, isAudiobook, isFolderBrowse)
             BaseItemKind.PLAYLIST -> forPlaylist(baseItemDto, group)
-            BaseItemKind.AUDIO -> forTrack(baseItemDto, group, parent, isAudiobook)
+            BaseItemKind.AUDIO -> forTrack(baseItemDto, group, parent, isAudiobook, singleItemStyle)
             else -> throw UnsupportedOperationException("Can't create mediaItem for ${baseItemDto.type}")
         }
     }

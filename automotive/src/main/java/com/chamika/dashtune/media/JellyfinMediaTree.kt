@@ -16,16 +16,22 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_FOLDER_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTERS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.NEW_ALBUM_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTER_BUCKET_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RADIO_ARTIST_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_LIBRARY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_NEW
 import com.google.common.cache.Cache
 import com.google.common.cache.CacheBuilder
 import kotlinx.coroutines.CancellationException
@@ -34,6 +40,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.artistsApi
 import org.jellyfin.sdk.api.client.extensions.genresApi
+import org.jellyfin.sdk.api.client.extensions.instantMixApi
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.api.client.extensions.userViewsApi
@@ -49,6 +56,7 @@ import java.util.concurrent.TimeoutException
 
 private const val MAX_ITEMS = 120
 private const val SHUFFLE_MAX_ITEMS = 500
+private const val RADIO_MAX_ITEMS = 200
 private const val REQUEST_HARD_TIMEOUT_MS = 10_000L
 
 class JellyfinMediaTree(
@@ -61,31 +69,17 @@ class JellyfinMediaTree(
         .maximumSize(1000)
         .build()
 
+    private val homeSections = HomeSections(context, api, itemFactory)
+
     fun invalidateCache() {
         mediaItems.invalidateAll()
     }
 
     fun getActiveCategoryIds(): List<String> {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        val defaults = setOf("latest", "favourites", "books", "playlists")
-        val selected = prefs.getStringSet("browse_categories", defaults) ?: defaults
-        val canonicalOrder = listOf(
-            "latest" to LATEST_ALBUMS,
-            "favourites" to FAVOURITES,
-            "books" to BOOKS,
-            "playlists" to PLAYLISTS,
-            "random" to RANDOM_ALBUMS,
-            "folders" to FOLDERS,
-            // Appended rather than slotted in alphabetically so existing users'
-            // root tab order doesn't shift when they upgrade.
-            "artists" to ARTISTS,
-            "albums" to ALBUMS,
-            "genres" to GENRES
-        )
-        val validKeys = canonicalOrder.map { it.first }.toSet()
-        val validSelected = selected.intersect(validKeys)
-        val finalSelected = validSelected.ifEmpty { defaults }
-        return canonicalOrder.filter { it.first in finalSelected }.map { it.second }
+        val selected = prefs.getStringSet(BrowseCategories.PREF_KEY, BrowseCategories.DEFAULTS)
+            ?: BrowseCategories.DEFAULTS
+        return BrowseCategories.nodeIds(selected)
     }
 
     private suspend fun <T : Any> retryOnFailure(
@@ -133,6 +127,41 @@ class JellyfinMediaTree(
                 id == ARTISTS -> itemFactory.artists()
                 id == ALBUMS -> itemFactory.albums()
                 id == GENRES -> itemFactory.genres()
+                id == HOME -> itemFactory.home()
+                id == SHUFFLE_FAVOURITES -> itemFactory.actionTile(
+                    SHUFFLE_FAVOURITES,
+                    context.getString(R.string.shuffle_favourites),
+                    context.getString(R.string.shuffled),
+                    "ic_star_filled"
+                )
+                id == SHUFFLE_NEW -> itemFactory.actionTile(
+                    SHUFFLE_NEW,
+                    context.getString(R.string.shuffle_new),
+                    context.getString(
+                        R.string.latest_tracks_subtitle,
+                        MediaItemResolver.LATEST_TRACKS_LIMIT
+                    ),
+                    "ic_shuffle"
+                )
+                id == SHUFFLE_LIBRARY -> itemFactory.actionTile(
+                    SHUFFLE_LIBRARY,
+                    context.getString(R.string.shuffle_library),
+                    context.getString(R.string.shuffled),
+                    "ic_shuffle"
+                )
+                id.startsWith(RADIO_ARTIST_PREFIX) -> retryOnFailure {
+                    val artist = api.userLibraryApi
+                        .getItem(id.removePrefix(RADIO_ARTIST_PREFIX).toUUID())
+                    itemFactory.artistRadio(artist.content)
+                }
+                id.startsWith(NEW_ALBUM_PREFIX) -> retryOnFailure {
+                    val album = api.userLibraryApi
+                        .getItem(id.removePrefix(NEW_ALBUM_PREFIX).toUUID())
+                    itemFactory.create(
+                        album.content,
+                        idPrefix = NEW_ALBUM_PREFIX
+                    )
+                }
                 id.startsWith(SHUFFLE_FOLDER_PREFIX) ->
                     itemFactory.shuffleAll(id.removePrefix(SHUFFLE_FOLDER_PREFIX))
                 id.startsWith(SHUFFLE_GENRE_PREFIX) ->
@@ -172,6 +201,7 @@ class JellyfinMediaTree(
     suspend fun getChildren(id: String): List<MediaItem> {
         return when {
             id == ROOT_ID -> getActiveCategoryIds().map { getItem(it) }
+            id == HOME -> homeSections.build(HomeLayout.tilesPerRow(context))
             id == LATEST_ALBUMS -> getLatestAlbums()
             id == RANDOM_ALBUMS -> getRandomAlbums()
             id == FAVOURITES -> getFavourite()
@@ -482,6 +512,111 @@ class JellyfinMediaTree(
                 Log.w(LOG_TAG, "Skipping unsupported item type in shuffle: ${it.type}")
                 null
             }
+        }
+    }
+
+    /**
+     * The server's instant mix for one artist: a long, varied queue seeded from that artist
+     * rather than just their own discography. Falls back to a shuffle of the artist's own
+     * tracks, since instant mix needs a populated music library to return anything.
+     */
+    suspend fun getArtistRadioTracks(artistId: String): List<MediaItem> {
+        val mix = retryOnFailure {
+            api.instantMixApi.getInstantMixFromArtists(
+                itemId = artistId.toUUID(),
+                limit = RADIO_MAX_ITEMS
+            ).content.items
+        }
+
+        val tracks = mix.ifEmpty {
+            retryOnFailure {
+                api.itemsApi.getItems(
+                    albumArtistIds = listOf(artistId.toUUID()),
+                    recursive = true,
+                    includeItemTypes = listOf(BaseItemKind.AUDIO),
+                    sortBy = listOf(ItemSortBy.RANDOM),
+                    limit = RADIO_MAX_ITEMS
+                ).content.items
+            }
+        }
+
+        return tracks.toMediaItems("artist radio")
+    }
+
+    /**
+     * The newest tracks in the music libraries, newest first. Backs both the "Shuffle new"
+     * tile and the continuation appended after a recently added album.
+     */
+    suspend fun getLatestTracks(limit: Int): List<MediaItem> {
+        val musicViews = musicViewIds()
+        if (musicViews.isEmpty()) return emptyList()
+
+        return musicViews
+            .flatMap { viewId ->
+                retryOnFailure {
+                    api.itemsApi.getItems(
+                        parentId = viewId,
+                        recursive = true,
+                        includeItemTypes = listOf(BaseItemKind.AUDIO),
+                        sortBy = listOf(ItemSortBy.DATE_CREATED),
+                        sortOrder = listOf(SortOrder.DESCENDING),
+                        limit = limit
+                    ).content.items
+                }
+            }
+            .sortedByDescending { it.dateCreated }
+            .take(limit)
+            .toMediaItems("latest tracks")
+    }
+
+    /** Every favourite track, shuffled. */
+    suspend fun getFavouriteTracksShuffled(): List<MediaItem> = retryOnFailure {
+        api.itemsApi.getItems(
+            recursive = true,
+            filters = listOf(ItemFilter.IS_FAVORITE),
+            includeItemTypes = listOf(BaseItemKind.AUDIO),
+            sortBy = listOf(ItemSortBy.RANDOM),
+            limit = SHUFFLE_MAX_ITEMS
+        ).content.items.toMediaItems("favourite shuffle")
+    }
+
+    /** A shuffle across the whole music library, scoped so audiobooks never leak in. */
+    suspend fun getLibraryShuffled(): List<MediaItem> {
+        val musicViews = musicViewIds()
+        if (musicViews.isEmpty()) return emptyList()
+
+        return musicViews
+            .flatMap { viewId ->
+                retryOnFailure {
+                    api.itemsApi.getItems(
+                        parentId = viewId,
+                        recursive = true,
+                        includeItemTypes = listOf(BaseItemKind.AUDIO),
+                        sortBy = listOf(ItemSortBy.RANDOM),
+                        limit = SHUFFLE_MAX_ITEMS
+                    ).content.items
+                }
+            }
+            .shuffled()
+            .take(SHUFFLE_MAX_ITEMS)
+            .toMediaItems("library shuffle")
+    }
+
+    private suspend fun musicViewIds(): List<org.jellyfin.sdk.model.UUID> = retryOnFailure {
+        api.userViewsApi.getUserViews().content.items
+            .filter { it.collectionType == CollectionType.MUSIC }
+            .map { it.id }
+    }
+
+    /** Builds items, seeds the tree cache, and drops anything the factory cannot represent. */
+    private fun List<BaseItemDto>.toMediaItems(context: String): List<MediaItem> = mapNotNull {
+        try {
+            val item = itemFactory.create(it)
+            mediaItems.put(item.mediaId, item)
+            item
+        } catch (e: UnsupportedOperationException) {
+            Log.w(LOG_TAG, "Skipping unsupported item type in $context: ${it.type}")
+            null
         }
     }
 

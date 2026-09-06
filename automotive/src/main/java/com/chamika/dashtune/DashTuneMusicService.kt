@@ -358,6 +358,10 @@ class DashTuneMusicService : MediaLibraryService() {
                         // Save audiobook position — reportAudiobookStopped uses currentTrack
                         // (the old item) so it's safe during transitions
                         reportAudiobookStopped(player)
+                        // Four of Home's five sections are derived from listening history,
+                        // and the play we just reported is part of it now — rebuild on the
+                        // next browse rather than serving the pre-drive Home.
+                        if (::callback.isInitialized) callback.invalidateHome()
                     }
                 }
 

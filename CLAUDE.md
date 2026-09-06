@@ -132,6 +132,28 @@ automotive/src/main/java/com/chamika/dashtune/
 - On track change, prefetches next 5 tracks via `DownloadManager`
 - Playback position saved every 1s, restored on playback resumption
 
+### Home Tab
+- One browse node (`HOME_ID`) whose children carry `EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE`, which the
+  AAOS Media Center renders as titled rows. Sections, in order: Continue listening, Made for you,
+  New for you, Jump back in, Mixes.
+- **Every tile is a container.** A tile that ends after one track defeats the point, so each one
+  resolves to a long queue: the saved music queue, the in-progress book, an artist instant mix, a
+  recently added album plus the rest of the newest 50 tracks, a genre shuffle, or a library shuffle.
+- Tiles the browser hands back as a bare media id are dispatched on their prefix in
+  `MediaItemResolver`: `RADIO_ARTIST:`, `NEW_ALBUM:`, plus the fixed ids `RESUME_QUEUE_ID`,
+  `SHUFFLE_FAVOURITES_ID`, `SHUFFLE_NEW_ID`, `SHUFFLE_LIBRARY_ID`. Genre mixes reuse `SHUFFLE_GENRE:`.
+- `HomeSections` runs the five sections in parallel, each under its own 5s timeout; a section that
+  fails or is slow is dropped so the rest of Home still renders inside the 8s browse timeout.
+- Row width comes from the display width alone (`HomeLayout`): 4 tiles at 1200dp and above, else 3.
+  AAOS never reports its grid column count. Sections are trimmed to that so none of them wraps.
+- Tile *shape* is not controllable. The content style API offers list, grid, category list, category
+  grid, a per-item override and group titles, and nothing for artwork shape — the OEM decides. The
+  shuffle tiles use `CATEGORY_GRID_ITEM` so their tintable vector icon is drawn with margins.
+- Home is cached in memory for 2 minutes and written through to Room for offline. It is invalidated
+  when playback stops and when a queue is set, since four of the five sections come from listening
+  history. `BrowseCategoriesMigration` adds Home to an existing user's tabs once, dropping the last
+  tab if that would exceed four.
+
 ### Audiobook Support
 - `MediaItemFactory.forAudiobook()` creates browsable/playable items with `IS_AUDIOBOOK_KEY` metadata flag
 - Browse hierarchy: Books category → Folders/Collections → Individual books → Chapters
@@ -162,7 +184,7 @@ automotive/src/main/java/com/chamika/dashtune/
 | Bitrate | `bitrate` | Direct stream | Direct stream, 320k, 256k, 192k, 160k, 128k |
 | Cache Size | `cache_size` | 200 MB | 100, 200, 500, 1024, 2048 MB |
 | Offline Song Count | `prefetch_count` | 5 | Off (0), 3, 5, 10, 15, 20 |
-| Browse Categories | `browse_categories` | Latest,Favourites,Books,Playlists | Min 2, max 4 from: Latest, Favourites, Books, Playlists, Random |
+| Browse Categories | `browse_categories` | Home,Favourites,Books,Playlists | Min 2, max 4 from: Home, Latest, Favourites, Books, Playlists, Random, Folders, Artists, Albums, Genres |
 
 ## Manifest Components
 - **DashTuneMusicService**: `foregroundServiceType="mediaPlayback"`, intent filters for Media3 + legacy MediaBrowserService
