@@ -267,6 +267,20 @@ class MediaItemFactoryTest {
     }
 
     @Test
+    fun `playlists asks for a grid through both content style hints`() {
+        val extras = factory.playlists().mediaMetadata.extras!!
+
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM,
+            extras.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE)
+        )
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM,
+            extras.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE)
+        )
+    }
+
+    @Test
     fun `folders is browsable with FOLDERS id`() {
         val item = factory.folders()
 

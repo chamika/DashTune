@@ -4,10 +4,14 @@ import android.content.ContentProvider
 import android.content.ContentResolver
 import android.content.ContentValues
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.chamika.dashtune.Constants.LOG_TAG
+import com.chamika.dashtune.media.roundCorners
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -51,6 +55,8 @@ class AlbumArtContentProvider : ContentProvider() {
         // so it must be a concurrent map.
         private val uriMap = java.util.concurrent.ConcurrentHashMap<Uri, Uri>()
         private val inProgress = HashMap<Uri, CountDownLatch>()
+        private val PLACEHOLDER_LOCK = Any()
+        private const val PLACEHOLDER_SIZE_PX = 512
 
         fun mapUri(uri: Uri): Uri {
             val path = uri.encodedPath?.substring(1)?.replace('/', ':') ?: return Uri.EMPTY
@@ -65,10 +71,19 @@ class AlbumArtContentProvider : ContentProvider() {
 
         fun originalUri(contentUri: Uri): Uri? = uriMap[contentUri]
 
+        /**
+         * Where the processed artwork for [contentUri] is cached. The suffix versions the
+         * processing: files written before corners were rounded keep their old name and are
+         * never served again. Bump it whenever the processing changes.
+         */
+        private fun cacheFile(cacheDir: File, contentUri: Uri): File? {
+            val path = contentUri.path?.removePrefix("/") ?: return null
+            return File(cacheDir, "$path.r1")
+        }
+
         fun clearCache(cacheDir: File) {
             uriMap.keys.forEach { contentUri ->
-                val path = contentUri.path?.removePrefix("/") ?: return@forEach
-                File(cacheDir, path).delete()
+                cacheFile(cacheDir, contentUri)?.delete()
             }
             uriMap.clear()
             // Also remove any lingering files from previous sessions not in uriMap
@@ -83,8 +98,7 @@ class AlbumArtContentProvider : ContentProvider() {
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
         val context = this.context ?: return null
         val remoteUri = uriMap[uri] ?: throw FileNotFoundException(uri.path)
-        val path = uri.path?.removePrefix("/") ?: throw FileNotFoundException("null path")
-        val file = File(context.cacheDir, path)
+        val file = cacheFile(context.cacheDir, uri) ?: throw FileNotFoundException("null path")
 
         if (file.exists()) {
             Log.d(LOG_TAG, "Returning existing file for $remoteUri: $file")
@@ -104,7 +118,7 @@ class AlbumArtContentProvider : ContentProvider() {
             Log.d(LOG_TAG, "Waiting for image download in separate thread... $remoteUri")
             existingLatch.await(15, TimeUnit.SECONDS)
             Log.d(LOG_TAG, "... Available!")
-            return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            return openOrPlaceholder(file)
         }
 
         val tmpFile = File.createTempFile("dashtune-albumart", ".png", context.cacheDir)
@@ -125,6 +139,7 @@ class AlbumArtContentProvider : ContentProvider() {
                     sink.flush()
                     sink.close()
 
+                    roundInPlace(tmpFile)
                     tmpFile.renameTo(file)
                 } else {
                     Log.w(LOG_TAG, "Failed to download $remoteUri: \n ${it.code} - ${it.body}")
@@ -142,10 +157,57 @@ class AlbumArtContentProvider : ContentProvider() {
             }
         }
 
-        if (!file.exists()) {
-            throw FileNotFoundException(uri.path)
+        return openOrPlaceholder(file)
+    }
+
+    /**
+     * Opens [file], or the placeholder tile when there is no artwork to serve (no Primary image
+     * on the server, or offline with nothing cached). Throwing here would make the host draw its
+     * own placeholder, a square in a random flat colour.
+     *
+     * The placeholder is never cached under the item's name, so artwork added on the server
+     * later still shows up.
+     */
+    private fun openOrPlaceholder(file: File): ParcelFileDescriptor {
+        val served = if (file.exists()) file else placeholderFile()
+        return ParcelFileDescriptor.open(served, ParcelFileDescriptor.MODE_READ_ONLY)
+    }
+
+    private fun placeholderFile(): File {
+        val context = context!!
+        // Not prefixed "Items", so clearCache leaves it alone: it never goes stale.
+        val file = File(context.cacheDir, "placeholder.r1.png")
+        synchronized(PLACEHOLDER_LOCK) {
+            if (!file.exists()) {
+                val drawable = context.getDrawable(R.drawable.art_placeholder)
+                    ?: throw FileNotFoundException("art_placeholder")
+                val bitmap = Bitmap.createBitmap(
+                    PLACEHOLDER_SIZE_PX, PLACEHOLDER_SIZE_PX, Bitmap.Config.ARGB_8888
+                )
+                drawable.setBounds(0, 0, PLACEHOLDER_SIZE_PX, PLACEHOLDER_SIZE_PX)
+                drawable.draw(Canvas(bitmap))
+                val tmp = File.createTempFile("dashtune-placeholder", ".png", context.cacheDir)
+                tmp.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                bitmap.recycle()
+                tmp.renameTo(file)
+            }
         }
-        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        return file
+    }
+
+    /**
+     * Rewrites [file] as a PNG with rounded corners. Anything that fails to decode is left
+     * as downloaded: square artwork beats no artwork.
+     */
+    private fun roundInPlace(file: File) {
+        val decoded = BitmapFactory.decodeFile(file.path) ?: run {
+            Log.w(LOG_TAG, "Could not decode artwork, serving it unrounded: $file")
+            return
+        }
+        val rounded = roundCorners(decoded)
+        decoded.recycle()
+        file.outputStream().use { rounded.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        rounded.recycle()
     }
 
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
