@@ -59,6 +59,7 @@
     </string-array>
 
     <string-array name="browseCategories">
+        <item>Home</item>
         <item>Latest</item>
         <item>Favourites</item>
         <item>Books</item>
@@ -71,6 +72,7 @@
     </string-array>
 
     <string-array name="browseCategoryValues">
+        <item>home</item>
         <item>latest</item>
         <item>favourites</item>
         <item>books</item>
@@ -83,7 +85,7 @@
     </string-array>
 
     <string-array name="defaultBrowseCategories">
-        <item>latest</item>
+        <item>home</item>
         <item>favourites</item>
         <item>books</item>
         <item>playlists</item>

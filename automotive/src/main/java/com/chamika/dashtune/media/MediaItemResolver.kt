@@ -6,19 +6,61 @@ import androidx.media3.common.MediaMetadata
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.NEW_ALBUM_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RADIO_ARTIST_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FAVOURITES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_LIBRARY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_NEW
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.isHomeActionId
 import com.chamika.dashtune.media.MediaItemFactory.Companion.isShuffleId
 
 class MediaItemResolver(
     private val repository: MediaRepository
 ) {
 
+    companion object {
+        /** Size of the "Shuffle new" queue and of the tail appended after a new album. */
+        const val LATEST_TRACKS_LIMIT = 50
+    }
+
     suspend fun resolveMediaItems(mediaItems: List<MediaItem>): List<MediaItem> {
         val playlist = mutableListOf<MediaItem>()
 
         mediaItems.forEach {
+            // Home tiles resolve to whole queues rather than to a Jellyfin item, so they are
+            // handled before the normal item lookup — there is nothing on the server to fetch.
+            if (it.mediaId.startsWith(RADIO_ARTIST_PREFIX)) {
+                playlist.addAll(
+                    repository.getArtistRadioTracks(it.mediaId.removePrefix(RADIO_ARTIST_PREFIX))
+                )
+                return@forEach
+            }
+
+            if (it.mediaId == SHUFFLE_FAVOURITES) {
+                playlist.addAll(repository.getFavouriteTracksShuffled())
+                return@forEach
+            }
+
+            if (it.mediaId == SHUFFLE_NEW) {
+                playlist.addAll(repository.getLatestTracks(LATEST_TRACKS_LIMIT).shuffled())
+                return@forEach
+            }
+
+            if (it.mediaId == SHUFFLE_LIBRARY) {
+                playlist.addAll(repository.getLibraryShuffled())
+                return@forEach
+            }
+
+            // A "New for you" album plays in full, then keeps going through the rest of the
+            // recently added tracks, so the queue outlasts the album's own 40 minutes.
+            if (it.mediaId.startsWith(NEW_ALBUM_PREFIX)) {
+                playlist.addAll(newAlbumQueue(it.mediaId.removePrefix(NEW_ALBUM_PREFIX)))
+                return@forEach
+            }
+
             if (it.mediaId.startsWith(SHUFFLE_FOLDER_PREFIX)) {
                 playlist.addAll(
                     repository.getShuffledTracks(it.mediaId.removePrefix(SHUFFLE_FOLDER_PREFIX))
@@ -60,9 +102,24 @@ class MediaItemResolver(
         return playlist
     }
 
+    /**
+     * The album's own tracks in order, then the remaining recently added tracks. Duplicates
+     * are dropped so a track from the album is never queued twice.
+     */
+    private suspend fun newAlbumQueue(albumId: String): List<MediaItem> {
+        val albumTracks = resolveMediaItems(repository.getChildren(albumId))
+        val albumTrackIds = albumTracks.map { it.mediaId }.toSet()
+        val continuation = repository.getLatestTracks(LATEST_TRACKS_LIMIT)
+            .filterNot { it.mediaId in albumTrackIds }
+        return albumTracks + continuation
+    }
+
     suspend fun isSingleItemWithParent(mediaItems: List<MediaItem>): Boolean {
         if (mediaItems.size != 1) return false
         val mediaId = mediaItems[0].mediaId
+        // Home action tiles and prefixed albums have no Jellyfin item behind their id, so
+        // there is no parent to expand — resolveMediaItems handles them itself.
+        if (isHomeActionId(mediaId) || mediaId.startsWith(NEW_ALBUM_PREFIX)) return false
         // A shuffle pseudo-item may be cached as a normal folder child in Room, which
         // would make the DB-parent fallback below misidentify it as "one track from a
         // folder" and play only that folder's immediate children non-recursively.

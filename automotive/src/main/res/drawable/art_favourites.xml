@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Album art for the "Shuffle favourites" tile. Full-bleed for the reason given in
+  art_shuffle.xml: it shares a row with real album artwork and has to read as a tile.
+
+  The fill is a gradient rather than a flat colour, and deliberately lighter than it looks it
+  should be: the AAOS media host paints its own background at roughly #181C1F, so a tile in
+  the app's own #0E1011 family is invisible against it. Measured on a head unit, not guessed.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="512dp"
+    android:height="512dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+
+    <path android:pathData="M0,0h512v512h-512z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="512"
+                android:endY="512"
+                android:type="linear">
+                <item android:color="#313D42" android:offset="0" />
+                <item android:color="#212B2F" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <group
+        android:scaleX="9"
+        android:scaleY="9"
+        android:translateX="148"
+        android:translateY="148">
+        <path
+            android:pathData="M12,3l2.6,5.6 6.1,0.7 -4.5,4.2 1.2,6 -5.4,-3 -5.4,3 1.2,-6 -4.5,-4.2 6.1,-0.7z"
+            android:strokeColor="#DAEAEA"
+            android:strokeWidth="1.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+</vector>

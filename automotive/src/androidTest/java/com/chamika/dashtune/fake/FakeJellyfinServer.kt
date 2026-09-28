@@ -8,6 +8,7 @@ import okhttp3.HttpUrl
 import okio.Buffer
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ItemSortBy
+import org.jellyfin.sdk.model.api.MediaType
 import org.jellyfin.sdk.model.api.SortOrder
 import java.io.Closeable
 import java.util.Collections
@@ -47,6 +48,7 @@ class FakeJellyfinServer(
 
     private val server = MockWebServer()
     private val recorded = Collections.synchronizedList(mutableListOf<ServerRequest>())
+    private val unhandled = Collections.synchronizedList(mutableListOf<String>())
 
     /** Fixed seed so `sortBy=Random` is stable across calls and pagination stays comparable. */
     private val shuffleSeed = 20_260_831L
@@ -74,7 +76,17 @@ class FakeJellyfinServer(
         server.close()
     }
 
-    fun clearRequests() = synchronized(recorded) { recorded.clear() }
+    fun clearRequests() = synchronized(recorded) {
+        recorded.clear()
+        unhandled.clear()
+    }
+
+    /**
+     * Routes the app asked for that this server does not model. Those answer 501, which the
+     * app turns into an empty section rather than an error — so a test that only checked the
+     * browse result would pass while a whole feature quietly did nothing.
+     */
+    val unhandledRequests: List<String> get() = unhandled.toList()
 
     fun requestsTo(pathPrefix: String): List<ServerRequest> =
         requests.filter { it.path.startsWith(pathPrefix) }
@@ -131,6 +143,13 @@ class FakeJellyfinServer(
 
             segments == listOf("Items") -> itemsQuery(url)
 
+            // GET /UserItems/Resume — what the Home "Continue listening" row is built from.
+            segments == listOf("UserItems", "Resume") -> resumeQuery(url)
+
+            // GET /Artists/{itemId}/InstantMix — the artist radio behind a Home tile.
+            segments.size == 3 && segments[0] == "Artists" && segments[2] == "InstantMix" ->
+                instantMixQuery(url, segments[1])
+
             segments == listOf("UserViews") ->
                 json(JellyfinJson.encode(queryResult(library.views)))
 
@@ -155,9 +174,12 @@ class FakeJellyfinServer(
 
             segments.firstOrNull() == "UserFavoriteItems" -> MockResponse.Builder().code(204).build()
 
-            else -> MockResponse.Builder().code(501)
-                .body("Unhandled route: ${request.method} ${url.encodedPath}")
-                .build()
+            else -> {
+                unhandled += "${request.method} ${url.encodedPath}"
+                MockResponse.Builder().code(501)
+                    .body("Unhandled route: ${request.method} ${url.encodedPath}")
+                    .build()
+            }
         }
     }
 
@@ -181,6 +203,44 @@ class FakeJellyfinServer(
         if (limit != null) page = page.take(limit)
 
         return json(JellyfinJson.encode(queryResult(page, startIndex, total)))
+    }
+
+    /**
+     * Partially played items under a parent, most recently played first — Jellyfin's
+     * `/UserItems/Resume`. The app uses it to find the audiobook to offer on Home.
+     */
+    private fun resumeQuery(url: HttpUrl): MockResponse {
+        val parentId = url.queryParameter("parentId")?.asUuid()
+        var results = if (parentId != null) library.descendantsOf(parentId) else library.items
+
+        results = results
+            .filter { it.playbackPositionTicks > 0 && !it.played }
+            .sortedByDescending { it.lastPlayedAt }
+
+        val mediaTypes = url.queryParameterValues("mediaTypes").filterNotNull()
+        if (mediaTypes.contains(MediaType.AUDIO.serialName)) {
+            results = results.filter { it.isAudio || it.kind == BaseItemKind.AUDIO_BOOK }
+        }
+
+        limitOf(url)?.let { results = results.take(it) }
+
+        return json(JellyfinJson.encode(queryResult(results)))
+    }
+
+    /**
+     * An instant mix seeded from one artist. The real server blends in similar artists;
+     * returning that artist's own tracks is enough to prove the app builds a long queue.
+     */
+    private fun instantMixQuery(url: HttpUrl, artistId: String): MockResponse {
+        val id = artistId.asUuid() ?: return MockResponse.Builder().code(404).build()
+
+        var results = library.items
+            .filter { it.isAudio && it.albumArtistIds.contains(id) }
+            .shuffled(Random(shuffleSeed))
+
+        limitOf(url)?.let { results = results.take(it) }
+
+        return json(JellyfinJson.encode(queryResult(results)))
     }
 
     private fun limitOf(url: HttpUrl): Int? = url.queryParameter("limit")?.toIntOrNull()
@@ -207,6 +267,12 @@ class FakeJellyfinServer(
         if (artistIds.isNotEmpty()) {
             results = results.filter { it.albumArtistIds.any(artistIds::contains) }
         }
+
+        // Explicit id lookup, which Home uses to turn played tracks back into their albums.
+        // Deliberately not order-preserving: the real server does not preserve `ids` order
+        // either, and the app has to restore it.
+        val ids = url.queryParameterValues("ids").mapNotNull { it?.asUuid() }
+        if (ids.isNotEmpty()) results = results.filter { it.id in ids }
 
         url.queryParameter("nameStartsWith")?.let { prefix ->
             results = results.filter { it.name.startsWith(prefix, ignoreCase = true) }
@@ -242,6 +308,10 @@ class FakeJellyfinServer(
 
             sortBy.contains(ItemSortBy.DATE_CREATED.serialName) ->
                 items.sortedBy { it.createdOrder }
+
+            // Never-played items sort below everything played, as on a real server.
+            sortBy.contains(ItemSortBy.DATE_PLAYED.serialName) ->
+                items.sortedWith(compareBy(nullsFirst()) { it.lastPlayedAt })
 
             // The app's default for container children: disc, then track, then name.
             sortBy.contains(ItemSortBy.PARENT_INDEX_NUMBER.serialName) ->

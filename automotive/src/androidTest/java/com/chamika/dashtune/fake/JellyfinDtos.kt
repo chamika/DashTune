@@ -8,6 +8,7 @@ import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.MediaType
 import org.jellyfin.sdk.model.api.NameGuidPair
 import org.jellyfin.sdk.model.api.UserItemDataDto
+import java.time.LocalDateTime
 
 /**
  * Encoder for the simulated server's responses.
@@ -60,6 +61,12 @@ fun FakeItem.toDto(): BaseItemDto = BaseItemDto(
         NameGuidPair(name = albumArtist ?: "Artist $index", id = artistId)
     }.ifEmpty { null },
     genres = genreNames.ifEmpty { null },
+    // Home ranks genres by play count off genreItems, which carries ids as well as names.
+    genreItems = genreIds.mapIndexed { index, genreId ->
+        NameGuidPair(name = genreNames.getOrNull(index) ?: "Genre $index", id = genreId)
+    }.ifEmpty { null },
+    // Mirrors createdOrder so a client-side "newest first" merge across libraries can sort.
+    dateCreated = LocalDateTime.of(2026, 1, 1, 0, 0).plusMinutes(createdOrder.toLong()),
     indexNumber = indexNumber,
     parentIndexNumber = parentIndexNumber,
     runTimeTicks = runTimeTicks,

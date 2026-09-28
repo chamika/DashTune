@@ -64,7 +64,7 @@ class DashTuneFixture {
     }
 
     /** Two tracks per album, so drilling into any album yields playable children. */
-    val tracks = albums.flatMap { album ->
+    val tracks = albums.flatMapIndexed { albumIndex, album ->
         (1..2).map { n ->
             library.add(
                 FakeItem(
@@ -79,6 +79,8 @@ class DashTuneFixture {
                     indexNumber = n,
                     parentIndexNumber = 1,
                     runTimeTicks = FakeAudio.DURATION_MS * TICKS_PER_MS,
+                    // Distinct and ascending, so "newest tracks" has a definite answer.
+                    createdOrder = albumIndex * 2 + n,
                 )
             )
         }
@@ -113,6 +115,27 @@ class DashTuneFixture {
     val favouriteTrack = library.replace(tracks[3].copy(isFavorite = true))
     val favouriteAlbum = library.replace(albums[5].copy(isFavorite = true))
     val favouriteArtist = library.replace(artists[2].copy(isFavorite = true))
+
+    // --- Play history: what the Home tab's "Jump back in" and "Mixes" are derived from. ---
+
+    /**
+     * Three tracks from three different albums, played on three different days. Newest
+     * first, so a test can assert the recency order rather than just the set. Deliberately
+     * two tracks from [historyAlbums]`[0]` so de-duplication by album is exercised too.
+     */
+    val playedTracks: List<FakeItem> = listOf(
+        tracks[0] to LocalDateTime.of(2026, 8, 30, 18, 0),
+        tracks[1] to LocalDateTime.of(2026, 8, 29, 18, 0),
+        tracks[2] to LocalDateTime.of(2026, 8, 28, 18, 0),
+        tracks[4] to LocalDateTime.of(2026, 8, 27, 18, 0),
+    ).map { (track, playedAt) ->
+        library.replace(track.copy(lastPlayedAt = playedAt, played = true))
+    }
+
+    /** The albums behind [playedTracks], most recently played first and de-duplicated. */
+    val historyAlbums: List<FakeItem> = playedTracks
+        .mapNotNull { played -> albums.firstOrNull { it.id == played.albumId } }
+        .distinctBy { it.id }
 
     // --- Audiobooks: collection -> book -> chapters, plus a standalone single-file book. ---
     val bookCollection = library.add(

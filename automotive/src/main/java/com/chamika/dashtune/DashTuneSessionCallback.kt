@@ -30,7 +30,9 @@ import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RESUME_QUEUE
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemResolver
 import com.chamika.dashtune.signin.SignInActivity
@@ -67,6 +69,9 @@ class DashTuneSessionCallback(
         const val PLAYLIST_INDEX_PREF = "playlistIndex"
         const val PLAYLIST_TRACK_POSITON_MS_PREF = "playlistTrackPositionMs"
 
+        /** Name of whatever container the saved queue came from, shown on the Home resume tile. */
+        const val PLAYLIST_TITLE_PREF = "playlistTitle"
+
         private const val BROWSE_TIMEOUT_MS = 8_000L
 
         // Bound for queue-mutating callbacks (onAddMediaItems/onSetMediaItems/
@@ -80,12 +85,36 @@ class DashTuneSessionCallback(
     private lateinit var resolver: MediaItemResolver
     private val initLock = Any()
 
+    /**
+     * The session to notify when Home goes stale, plus the number of children it last
+     * served. Media3 wants a child count with the notification, and a wrong one makes some
+     * head units re-request nothing at all.
+     */
+    @Volatile
+    private var homeSession: MediaLibraryService.MediaLibrarySession? = null
+
+    @Volatile
+    private var homeChildCount = 0
+
     fun invalidateCache() {
         synchronized(initLock) {
             if (::repository.isInitialized) {
                 repository.invalidateCache()
             }
         }
+    }
+
+    /**
+     * Drops the cached Home node and tells any attached browser to re-read it. Called after
+     * playback changes, because four of Home's five sections are derived from listening
+     * history and would otherwise keep showing the state from before the drive.
+     */
+    fun invalidateHome() {
+        synchronized(initLock) {
+            if (!::repository.isInitialized) return
+            repository.invalidateHome()
+        }
+        homeSession?.notifyChildrenChanged(HOME, homeChildCount, null)
     }
 
     override fun onConnect(
@@ -194,6 +223,11 @@ class DashTuneSessionCallback(
                 val children = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
                     repository.getChildren(parentId)
                 } ?: throw java.util.concurrent.TimeoutException("Browse timed out after ${BROWSE_TIMEOUT_MS}ms")
+                if (parentId == HOME) {
+                    // Remembered so a later invalidation can notify with the right count.
+                    homeSession = session
+                    homeChildCount = children.size
+                }
                 LibraryResult.ofItemList(children.page(page, pageSize), params)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to get children for $parentId", e)
@@ -359,6 +393,21 @@ class DashTuneSessionCallback(
         startIndex: Int,
         startPositionMs: Long,
     ): MediaSession.MediaItemsWithStartPosition {
+        // The Home "Continue listening" tile: restore exactly what onPlaybackResumption
+        // would have, but on an explicit tap rather than a headunit-initiated resume.
+        if (mediaItems.size == 1 && mediaItems[0].mediaId == RESUME_QUEUE) {
+            val saved = loadSavedQueue()
+            handleAudiobookShuffle(
+                mediaSession,
+                saved.mediaItems.any {
+                    it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+                }
+            )
+            return saved
+        }
+
+        val queueTitle = queueTitleFor(mediaItems)
+
         if (resolver.isSingleItemWithParent(mediaItems)) {
             val singleItem = mediaItems[0]
             val resolvedItems = resolver.expandSingleItem(singleItem)
@@ -381,7 +430,7 @@ class DashTuneSessionCallback(
                         selectedIndex,
                         positionMs
                     )
-                    savePlaylist(resolvedItems)
+                    savePlaylist(resolvedItems, queueTitle)
                     return mediaItemsWithStartPosition
                 } catch (e: Exception) {
                     Log.w(LOG_TAG, "Failed to get chapter resume position", e)
@@ -395,7 +444,7 @@ class DashTuneSessionCallback(
                 resolvedItems.indexOfFirst { it.mediaId == singleItem.mediaId }.coerceAtLeast(0),
                 startPositionMs
             )
-            savePlaylist(resolvedItems)
+            savePlaylist(resolvedItems, queueTitle)
             return mediaItemsWithStartPosition
         }
 
@@ -430,16 +479,82 @@ class DashTuneSessionCallback(
             finalStartIndex,
             finalStartPositionMs
         )
-        savePlaylist(resolvedItems)
+        savePlaylist(resolvedItems, queueTitle)
         return mediaItemsWithStartPosition
     }
 
-    private fun savePlaylist(resolvedItems: List<MediaItem>) {
+    /**
+     * The name of whatever the user tapped, so the Home resume tile can say what it will
+     * play. Null when several items were set at once, since no single name describes them.
+     */
+    private fun queueTitleFor(mediaItems: List<MediaItem>): String? {
+        if (mediaItems.size != 1) return null
+        val item = mediaItems[0]
+        if (item.mediaId == RESUME_QUEUE) return null
+        return item.mediaMetadata.title?.toString()
+    }
+
+    private fun savePlaylist(resolvedItems: List<MediaItem>, queueTitle: String? = null) {
         val playlistIDs = resolvedItems.map { it.mediaId }.joinToString(",")
         Log.d(LOG_TAG, "Saving playlist $playlistIDs")
 
         PreferenceManager.getDefaultSharedPreferences(service).edit {
             putString(PLAYLIST_IDS_PREF, playlistIDs)
+            if (queueTitle != null) {
+                putString(PLAYLIST_TITLE_PREF, queueTitle)
+            }
+        }
+
+        // What Home shows depends on what was just played, so the next browse must rebuild.
+        invalidateHome()
+    }
+
+    /**
+     * The queue saved from the last session. Shared by the headunit's own resume callback
+     * and by the Home "Continue listening" tile, so both restore the same thing.
+     */
+    private suspend fun loadSavedQueue(): MediaSession.MediaItemsWithStartPosition {
+        return try {
+            val prefs = PreferenceManager.getDefaultSharedPreferences(service)
+
+            val savedIds = prefs
+                .getString(PLAYLIST_IDS_PREF, "")
+                ?.split(",")
+                ?.filter { it.isNotEmpty() }
+                ?: emptyList()
+
+            val playableIds = savedIds.filter { service.isTrackCachedOrOnline(it) }
+            if (playableIds.size < savedIds.size) {
+                Log.i(LOG_TAG, "Skipping ${savedIds.size - playableIds.size} unplayable tracks (offline + uncached)")
+            }
+
+            val mediaItemsToRestore = withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
+                playableIds
+                    .map { async { repository.getItem(it) } }
+                    .awaitAll()
+            } ?: run {
+                Log.w(LOG_TAG, "Playback resumption timed out after ${COMMAND_TIMEOUT_MS}ms")
+                emptyList()
+            }
+
+            Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
+            FirebaseUtils.safeLog("Restoring playback: index=${prefs.getInt(PLAYLIST_INDEX_PREF, 0)}, trackCount=${mediaItemsToRestore.size}")
+
+            if (mediaItemsToRestore.isEmpty()) {
+                MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
+            } else {
+                val savedIndex = prefs.getInt(PLAYLIST_INDEX_PREF, 0)
+                    .coerceIn(0, mediaItemsToRestore.lastIndex)
+                MediaSession.MediaItemsWithStartPosition(
+                    mediaItemsToRestore,
+                    savedIndex,
+                    prefs.getLong(PLAYLIST_TRACK_POSITON_MS_PREF, 0),
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Failed to resume playback", e)
+            FirebaseUtils.safeRecordException(e)
+            MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
         }
     }
 
@@ -512,54 +627,7 @@ class DashTuneSessionCallback(
         Log.i(LOG_TAG, "onPlaybackResumption")
         ensureTreeInitialized()
 
-        return SuspendToFutureAdapter.launchFuture {
-            try {
-                val prefs = PreferenceManager.getDefaultSharedPreferences(service)
-
-                val savedIds = prefs
-                    .getString(PLAYLIST_IDS_PREF, "")
-                    ?.split(",")
-                    ?.filter { it.isNotEmpty() }
-                    ?: emptyList()
-
-                val playableIds = savedIds.filter { service.isTrackCachedOrOnline(it) }
-                if (playableIds.size < savedIds.size) {
-                    Log.i(LOG_TAG, "Skipping ${savedIds.size - playableIds.size} unplayable tracks (offline + uncached)")
-                }
-
-                val mediaItemsToRestore = withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
-                    playableIds
-                        .map { async { repository.getItem(it) } }
-                        .awaitAll()
-                } ?: run {
-                    Log.w(LOG_TAG, "Playback resumption timed out after ${COMMAND_TIMEOUT_MS}ms")
-                    emptyList()
-                }
-
-                Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
-                FirebaseUtils.safeLog("Restoring playback: index=${prefs.getInt(PLAYLIST_INDEX_PREF, 0)}, trackCount=${mediaItemsToRestore.size}")
-
-                if (mediaItemsToRestore.isEmpty()) {
-                    MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
-                } else {
-                    val savedIndex = prefs.getInt(PLAYLIST_INDEX_PREF, 0)
-                        .coerceIn(0, mediaItemsToRestore.lastIndex)
-                    MediaSession.MediaItemsWithStartPosition(
-                        mediaItemsToRestore,
-                        savedIndex,
-                        prefs.getLong(PLAYLIST_TRACK_POSITON_MS_PREF, 0),
-                    )
-                }
-            } catch (e: Exception) {
-                Log.e(LOG_TAG, "Failed to resume playback", e)
-                FirebaseUtils.safeRecordException(e)
-                MediaSession.MediaItemsWithStartPosition(
-                    emptyList(),
-                    0,
-                    0L
-                )
-            }
-        }
+        return SuspendToFutureAdapter.launchFuture { loadSavedQueue() }
     }
 
     override fun onCustomCommand(

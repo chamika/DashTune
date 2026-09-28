@@ -13,6 +13,10 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import com.chamika.dashtune.DashTuneMusicService
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.LOGIN_COMMAND
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_IDS_PREF
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_INDEX_PREF
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TITLE_PREF
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TRACK_POSITON_MS_PREF
 import com.chamika.dashtune.auth.JellyfinAccountManager
 import com.chamika.dashtune.data.db.DashTuneDatabase
 import com.chamika.dashtune.fake.DashTuneFixture
@@ -128,6 +132,13 @@ class DashTuneE2eRule(
             putBoolean("cache_favourites", false)
             putString("bitrate", "Direct stream")
             putString("cache_size", "100")
+            // The saved queue outlives any one test the way the Room cache does, and the
+            // Home tab reads it — a queue left behind by an earlier test would show up as a
+            // "Continue listening" row in a test that expects a fresh install.
+            remove(PLAYLIST_IDS_PREF)
+            remove(PLAYLIST_INDEX_PREF)
+            remove(PLAYLIST_TRACK_POSITON_MS_PREF)
+            remove(PLAYLIST_TITLE_PREF)
         }.commit()
     }
 
