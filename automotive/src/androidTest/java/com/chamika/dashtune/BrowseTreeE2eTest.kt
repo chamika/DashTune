@@ -1,5 +1,6 @@
 package com.chamika.dashtune
 
+import androidx.media3.session.MediaConstants
 import androidx.preference.PreferenceManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
@@ -150,6 +151,21 @@ class BrowseTreeE2eTest {
         assertEquals(
             fixture.albums.count { firstGenre.id in it.genreIds },
             children.size - 1
+        )
+    }
+
+    @Test
+    fun playlistsTabReachesTheBrowserAsAGrid() {
+        val playlists = browser.childrenOf(ROOT_ID).single { it.mediaId == PLAYLISTS }
+        val extras = playlists.mediaMetadata.extras!!
+
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM,
+            extras.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE)
+        )
+        assertEquals(
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM,
+            extras.getInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE)
         )
     }
 
