@@ -148,6 +148,13 @@ automotive/src/main/java/com/chamika/dashtune/
   AAOS never reports its grid column count. Sections are trimmed to that so none of them wraps.
 - Tile *shape* is not controllable. The content style API offers list, grid, category list, category
   grid, a per-item override and group titles, and nothing for artwork shape — the OEM decides.
+  So corners are baked into the artwork: `AlbumArtContentProvider` rounds every image it serves
+  (`roundCorners`, 6% of the short side) and caches it as `<path>.r1`. The `art_*` vectors use
+  the same radius. Bump the `.r1` suffix whenever the processing changes. When there is no image
+  (404, offline, nothing cached) it serves `art_placeholder` rather than throwing. A throw makes the
+  host draw its own square in a random flat colour. The placeholder is never cached per item.
+- Section title typography is also the host's. `GROUP_TITLE` is only a string, so on the Volvo
+  the titles come out large (like Spotify's) and on the reference emulator they come out small.
 - The shuffle tiles are ordinary grid items whose artwork (`art_shuffle`, `art_favourites`) is a
   full-bleed vector carrying its own dark tile. `CATEGORY_GRID_ITEM` was tried first and is wrong
   here: it draws a bare tinted icon with no tile, so the tile read as a hole in a row of albums.

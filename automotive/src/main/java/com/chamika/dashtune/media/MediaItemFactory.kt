@@ -154,25 +154,14 @@ class MediaItemFactory(
     }
 
     fun playlists(): MediaItem {
-        val extras = Bundle()
-        extras.putInt(
-            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
-            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+        // Both hints, like the other grid tabs. The reference host grids on PLAYABLE alone,
+        // but an OEM host may take a tab's style from BROWSABLE and fall back to a list.
+        return albumCategory(
+            PLAYLISTS,
+            "Playlists",
+            "ic_playlists",
+            mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS
         )
-
-        val metadata = MediaMetadata.Builder()
-            .setTitle("Playlists")
-            .setIsBrowsable(true)
-            .setIsPlayable(false)
-            .setArtworkUri("android.resource://com.chamika.dashtune/drawable/ic_playlists".toUri())
-            .setExtras(extras)
-            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS)
-            .build()
-
-        return MediaItem.Builder()
-            .setMediaId(PLAYLISTS)
-            .setMediaMetadata(metadata)
-            .build()
     }
 
     fun books(): MediaItem {

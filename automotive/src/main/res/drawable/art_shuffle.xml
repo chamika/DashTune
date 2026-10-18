@@ -15,7 +15,8 @@
     android:viewportWidth="512"
     android:viewportHeight="512">
 
-    <path android:pathData="M0,0h512v512h-512z">
+    <!-- Rounded to match ARTWORK_CORNER_FRACTION (6% of 512) applied to album art. -->
+    <path android:pathData="M31,0h450a31,31 0 0,1 31,31v450a31,31 0 0,1 -31,31h-450a31,31 0 0,1 -31,-31v-450a31,31 0 0,1 31,-31z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:startX="0"

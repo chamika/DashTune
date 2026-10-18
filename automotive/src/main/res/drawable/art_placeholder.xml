@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Served by AlbumArtContentProvider for any item with no artwork of its own (Jellyfin has no
+  Primary image, or the device is offline with nothing cached). Without it the host draws its
+  own placeholder: a square in a random flat colour that clashes with the rounded tiles beside it.
+  Same rounded gradient tile as art_shuffle.xml, so it reads as part of the set.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="512dp"
+    android:height="512dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+
+    <!-- Rounded to match ARTWORK_CORNER_FRACTION (6% of 512) applied to album art. -->
+    <path android:pathData="M31,0h450a31,31 0 0,1 31,31v450a31,31 0 0,1 -31,31h-450a31,31 0 0,1 -31,-31v-450a31,31 0 0,1 31,-31z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="512"
+                android:endY="512"
+                android:type="linear">
+                <item android:color="#313D42" android:offset="0" />
+                <item android:color="#212B2F" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <group
+        android:scaleX="9"
+        android:scaleY="9"
+        android:translateX="148"
+        android:translateY="148">
+        <path
+            android:fillColor="#DAEAEA"
+            android:pathData="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z" />
+    </group>
+</vector>
