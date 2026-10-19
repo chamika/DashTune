@@ -1,16 +1,20 @@
 package com.chamika.dashtune
 
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
+import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaConstants
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import androidx.preference.PreferenceManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_IDS_PREF
+import com.chamika.dashtune.DashTuneSessionCallback.Companion.SYNC_COMMAND
+import com.chamika.dashtune.data.MediaRepository.Companion.SAVED_QUEUE
 import com.chamika.dashtune.media.HomeLayout
 import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.NEW_ALBUM_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RADIO_ARTIST_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RESUME_QUEUE
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
@@ -20,13 +24,15 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_NEW
 import com.chamika.dashtune.media.MediaItemResolver
 import com.chamika.dashtune.support.DashTuneE2eRule
 import com.chamika.dashtune.support.awaitCondition
+import com.chamika.dashtune.support.awaitOnMain
+import com.chamika.dashtune.support.childTitlesOf
 import com.chamika.dashtune.support.childIdsOf
 import com.chamika.dashtune.support.childrenOf
 import com.chamika.dashtune.support.onMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -256,12 +262,9 @@ class HomeE2eTest {
 
     @Test
     fun theResumeTileReplaysTheSavedQueue() {
-        // Resuming deliberately drops tracks that are neither cached nor reachable, so this
-        // needs a validated network. A headless emulator usually reports none (the fake
-        // server is on loopback, which does not count), and the tile then correctly resolves
-        // to nothing — so assert the replay only where the app would really attempt it.
-        assumeTrue("device reports no validated network", hasValidatedNetwork())
-
+        // Resuming used to drop every track that was not downloaded unless the network was
+        // validated — which a car rarely is just after starting, and a headless emulator
+        // never is. It no longer filters, so this holds on any network.
         val albumIds = playFeaturedAlbum()
 
         val tile = home().first { it.mediaId == RESUME_QUEUE }
@@ -270,11 +273,48 @@ class HomeE2eTest {
         assertEquals(albumIds, queue)
     }
 
-    private fun hasValidatedNetwork(): Boolean {
-        val cm = dashTune.context.getSystemService(ConnectivityManager::class.java)
-        val network = cm?.activeNetwork ?: return false
-        val caps = cm.getNetworkCapabilities(network) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    @Test
+    fun playbackResumesFromTheSavedQueueWithTheServerGone() {
+        val albumIds = playFeaturedAlbum()
+        awaitCondition(message = { "the queue's tracks to be saved for a cold start" }) {
+            dashTune.cachedChildIds(SAVED_QUEUE) == albumIds
+        }
+        onMain {
+            browser.stop()
+            browser.clearMediaItems()
+        }
+
+        dashTune.server.close()
+        // Re-running login drops the in-memory tree cache, as a cold start would.
+        dashTune.applyLogin()
+
+        // What the head unit sends at start-up: play() on an empty player.
+        onMain { browser.play() }
+        awaitCondition(message = { "the saved queue to be restored" }) {
+            onMain { browser.mediaItemCount } == albumIds.size
+        }
+        assertEquals(
+            albumIds,
+            onMain { (0 until browser.mediaItemCount).map { browser.getMediaItemAt(it).mediaId } }
+        )
+    }
+
+    // --- Offline cache ---
+
+    @Test
+    fun aSyncWithTheServerGoneLeavesTheOfflineCacheAlone() {
+        // The field failure: with Home among the tabs, a sync at the start of a drive — before
+        // the server was reachable — counted Home's offline tiles as success and replaced the
+        // whole cache with nothing.
+        val playlists = browser.childTitlesOf(PLAYLISTS)
+        assertTrue("expected playlists while online", playlists.isNotEmpty())
+
+        dashTune.server.close()
+        val result = awaitOnMain {
+            browser.sendCustomCommand(SessionCommand(SYNC_COMMAND, Bundle()), Bundle())
+        }
+
+        assertNotEquals(SessionResult.RESULT_SUCCESS, result.resultCode)
+        assertEquals(playlists, browser.childTitlesOf(PLAYLISTS))
     }
 }
