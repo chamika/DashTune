@@ -81,4 +81,5 @@
     <string name="trusted_certificate_removed">Certificate removed</string>
     <string name="retry">Retry</string>
     <string name="library_unavailable">Library unavailable. Check your connection and retry.</string>
+    <string name="media_unavailable">Couldn\'t load this. Check your connection and try again.</string>
 </resources>
