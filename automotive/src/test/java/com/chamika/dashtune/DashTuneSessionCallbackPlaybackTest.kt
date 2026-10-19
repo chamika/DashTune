@@ -115,6 +115,20 @@ class DashTuneSessionCallbackPlaybackTest {
 
         assertEquals(listOf(a, b), restored.mediaItems.map { it.mediaId })
         assertEquals(0, restored.startIndex)
+        // The saved index will follow the player through the shorter list, so the saved ids
+        // must be that list too or the next resume starts the wrong track.
+        assertEquals("$a,$b", prefs.getString(PLAYLIST_IDS_PREF, null))
+    }
+
+    @Test
+    fun `a complete restore leaves the saved queue as it was`() {
+        saveQueue(listOf(a, b, c), index = 1)
+        givenSavedQueueRows(a, b, c)
+
+        awaitOnMain(resume())
+
+        assertEquals("$a,$b,$c", prefs.getString(PLAYLIST_IDS_PREF, null))
+        coVerify(exactly = 0) { dao.replaceChildren(any()) }
     }
 
     @Test
@@ -147,6 +161,7 @@ class DashTuneSessionCallbackPlaybackTest {
         every { player.mediaItemCount } returns 5
 
         assertFailsWithIllegalState(resume())
+        assertEquals("$a,$b", prefs.getString(PLAYLIST_IDS_PREF, null))
     }
 
     @Test

@@ -70,6 +70,9 @@ class MediaRepository(
     // browser that happened to start it gives up (browse calls run under a timeout).
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** One lane, so two queues set in quick succession are written in the order they were set. */
+    private val queueWrites = Dispatchers.IO.limitedParallelism(1)
+
     private val staticIds = setOf(
         ROOT_ID, HOME, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS,
         ARTISTS, ALBUMS, GENRES
@@ -266,7 +269,7 @@ class MediaRepository(
     fun saveQueue(items: List<MediaItem>) {
         if (items.isEmpty()) return
         val rows = items.mapIndexed { index, item -> item.toEntity(SAVED_QUEUE, index) }
-        scope.launch {
+        scope.launch(queueWrites) {
             try {
                 dao.replaceChildren(mapOf(SAVED_QUEUE to rows))
             } catch (e: Exception) {

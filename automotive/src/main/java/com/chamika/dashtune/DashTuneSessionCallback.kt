@@ -411,6 +411,7 @@ class DashTuneSessionCallback(
         if (mediaItems.size == 1 && mediaItems[0].mediaId == RESUME_QUEUE) {
             val saved = loadSavedQueue()
             if (saved.mediaItems.isEmpty()) throw NothingToPlayException("Saved queue could not be restored")
+            keepRestoredQueue(saved)
             handleAudiobookShuffle(
                 mediaSession,
                 saved.mediaItems.any {
@@ -693,7 +694,23 @@ class DashTuneSessionCallback(
                 "A queue was set while the saved one was restoring; keeping it"
             }
             check(saved.mediaItems.isNotEmpty()) { "No saved queue could be restored" }
+            keepRestoredQueue(saved)
             saved
+        }
+    }
+
+    /**
+     * Saves a restore that skipped tracks as the queue. The saved index follows the player, so
+     * once it plays the shorter list the index points into that list — against the old ids it
+     * would resume the wrong track next time, and Home would count the wrong total.
+     */
+    private fun keepRestoredQueue(restored: MediaSession.MediaItemsWithStartPosition) {
+        val savedIds = PreferenceManager.getDefaultSharedPreferences(service)
+            .getString(PLAYLIST_IDS_PREF, "")
+            ?.split(",")
+            ?.filter { it.isNotEmpty() }
+        if (restored.mediaItems.map { it.mediaId } != savedIds) {
+            savePlaylist(restored.mediaItems)
         }
     }
 
