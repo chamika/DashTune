@@ -180,6 +180,8 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var focusRecovery: Runnable
     private lateinit var networkErrorRetry: Runnable
     private var networkErrorRetries = 0
+    private var consecutiveErrorSkips = 0
+    private lateinit var focusDenialRetry: FocusDenialRetry
 
     private lateinit var connectivityManager: ConnectivityManager
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -310,9 +312,18 @@ class DashTuneMusicService : MediaLibraryService() {
                 }
                 networkErrorRetries = 0
 
-                if (p.hasNextMediaItem()) {
+                // With repeat-all on, hasNextMediaItem() never runs out, so a queue in which
+                // nothing can play (a server answering 5xx, say) was skipped round forever.
+                // Each item gets one chance; then stop, keeping the queue for the next play.
+                if (p.hasNextMediaItem() && consecutiveErrorSkips < p.mediaItemCount) {
+                    consecutiveErrorSkips++
                     p.seekToNextMediaItem()
                     p.prepare()
+                } else if (p.hasNextMediaItem()) {
+                    Log.w(LOG_TAG, "Every queued item failed to play; stopping")
+                    FirebaseUtils.safeLog("Every queued item failed to play; stopping")
+                    consecutiveErrorSkips = 0
+                    p.stop()
                 } else {
                     p.stop()
                     p.clearMediaItems()
@@ -349,6 +360,7 @@ class DashTuneMusicService : MediaLibraryService() {
                     FirebaseUtils.safeSetCustomKey("is_playing", player.isPlaying)
                     if (player.isPlaying) {
                         networkErrorRetries = 0
+                        consecutiveErrorSkips = 0
                         startPlaybackPoll()
                         if (isPlayingAudiobook && player.currentMediaItem != null) {
                             reportAudiobookStart(player)
@@ -360,8 +372,12 @@ class DashTuneMusicService : MediaLibraryService() {
                         reportAudiobookStopped(player)
                         // Four of Home's five sections are derived from listening history,
                         // and the play we just reported is part of it now — rebuild on the
-                        // next browse rather than serving the pre-drive Home.
-                        if (::callback.isInitialized) callback.invalidateHome()
+                        // next browse rather than serving the pre-drive Home. Only when the
+                        // listen actually stopped: rebuffering in a dead zone (playWhenReady
+                        // still set) would just rebuild against a server that can't be reached.
+                        val listenStopped = !player.playWhenReady ||
+                                player.playbackState == Player.STATE_ENDED
+                        if (listenStopped && ::callback.isInitialized) callback.invalidateHome()
                     }
                 }
 
@@ -393,6 +409,8 @@ class DashTuneMusicService : MediaLibraryService() {
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
         player.addListener(playerListener)
+        focusDenialRetry = FocusDenialRetry(player, handler)
+        player.addListener(focusDenialRetry)
 
         // Restore saved shuffle and repeat states
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
@@ -476,6 +494,10 @@ class DashTuneMusicService : MediaLibraryService() {
 
                 if (!accountManager.isAuthenticated) return
 
+                // Home may have been built while the server was unreachable. This callback
+                // runs on a ConnectivityManager thread; the session must be told on main.
+                handler.post { if (::callback.isInitialized) callback.invalidateHome() }
+
                 val prefs = PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService)
                 val lastSync = prefs.getLong("last_sync_timestamp", 0L)
                 val sixHoursMs = 6 * 60 * 60 * 1000L
@@ -488,6 +510,8 @@ class DashTuneMusicService : MediaLibraryService() {
                         if (success) {
                             prefs.edit { putLong("last_sync_timestamp", System.currentTimeMillis()) }
                             mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
+                            // A successful sync proves the server is reachable again.
+                            callback.invalidateHome()
                             Toast.makeText(
                                 this@DashTuneMusicService,
                                 R.string.library_synced,
@@ -561,6 +585,8 @@ class DashTuneMusicService : MediaLibraryService() {
 
         mediaLibrarySession.release()
         mediaLibrarySession.player.removeListener(playerListener)
+        mediaLibrarySession.player.removeListener(focusDenialRetry)
+        focusDenialRetry.release()
         mediaLibrarySession.player.release()
         handler.removeCallbacks(playbackPoll)
         handler.removeCallbacks(audiobookPositionReporter)
@@ -601,24 +627,6 @@ class DashTuneMusicService : MediaLibraryService() {
 
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
         super.onUpdateNotification(session, startInForegroundRequired)
-    }
-
-    fun isTrackCachedOrOnline(mediaId: String): Boolean {
-        if (hasInternet()) return true
-        return try {
-            val state = downloadManager.downloadIndex.getDownload(mediaId)?.state
-            state == Download.STATE_COMPLETED
-        } catch (e: Exception) {
-            Log.w(LOG_TAG, "Failed to check cache for $mediaId", e)
-            false
-        }
-    }
-
-    private fun hasInternet(): Boolean {
-        val net = connectivityManager.activeNetwork ?: return false
-        val caps = connectivityManager.getNetworkCapabilities(net) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     fun onLogin() {
