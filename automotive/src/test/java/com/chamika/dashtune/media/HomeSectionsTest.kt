@@ -15,6 +15,7 @@ import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.Response
+import org.jellyfin.sdk.api.client.exception.TimeoutException
 import org.jellyfin.sdk.api.client.extensions.artistsApi
 import org.jellyfin.sdk.api.client.extensions.genresApi
 import org.jellyfin.sdk.api.client.extensions.itemsApi
@@ -40,6 +41,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.net.UnknownHostException
 import java.time.LocalDateTime
 import java.util.UUID
 
@@ -212,6 +214,19 @@ class HomeSectionsTest {
         assertTrue(groups.contains(context.getString(R.string.made_for_you)))
         assertTrue(groups.contains(context.getString(R.string.jump_back_in)))
         assertTrue(groups.contains(context.getString(R.string.mixes)))
+    }
+
+    @Test
+    fun `the resume tile survives when the server cannot be reached`() = runTest {
+        // It needs only the saved queue. It used to share a section with the in-progress
+        // book, whose lookup failing took the resume tile down with it.
+        givenASavedQueue()
+        coEvery { userViewsApi.getUserViews() } throws
+            TimeoutException("HTTP host unreachable", UnknownHostException("server"))
+
+        val built = sections.build(tilesPerRow = 4)
+
+        assertEquals(MediaItemFactory.RESUME_QUEUE, built.first().mediaId)
     }
 
     @Test

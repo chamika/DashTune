@@ -28,13 +28,19 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTER_BUCKET_PREFIX
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RESUME_QUEUE
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FAVOURITES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_LIBRARY
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_NEW
 import com.chamika.dashtune.FirebaseUtils
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -45,6 +51,15 @@ class MediaRepository(
     private val tree: JellyfinMediaTree,
     private val itemFactory: MediaItemFactory
 ) {
+
+    companion object {
+        /**
+         * Room parent holding the tracks of the last queue that was set, in order. Lets a cold
+         * start restore the queue without one network call per track, which a queue of a few
+         * hundred tracks cannot finish inside the resumption timeout.
+         */
+        const val SAVED_QUEUE = "SAVED_QUEUE_ID"
+    }
 
     private val syncMutex = Mutex()
 
@@ -66,7 +81,21 @@ class MediaRepository(
      * every album — either turns a routine sync into a library-sized fetch. Deeper levels
      * cache lazily via [getChildren] as the user browses.
      */
-    private val shallowSyncSections = setOf(HOME, FOLDERS, ARTISTS, ALBUMS, GENRES)
+    private val shallowSyncSections = setOf(FOLDERS, GENRES)
+
+    /**
+     * Sections sync leaves alone. Home caches itself on every browse, and the Artists and
+     * Albums indexes are built on the device. None of them fails when the server is
+     * unreachable — Home just comes back with fewer tiles — so counting them let a sync that
+     * never reached the server pass for a successful one and replace the cache with nothing.
+     */
+    private val unsyncedSections = setOf(HOME, ARTISTS, ALBUMS)
+
+    /** Parents a full sync must not clear: neither is rebuilt by sync. */
+    private val keptBySync = listOf(HOME, SAVED_QUEUE)
+
+    /** Home tiles built without the server. A Home made only of these proves nothing was reached. */
+    private val localHomeTiles = setOf(RESUME_QUEUE, SHUFFLE_FAVOURITES, SHUFFLE_NEW, SHUFFLE_LIBRARY)
 
     /**
      * Home rebuilt this recently is served from memory. Home is five live queries, and a
@@ -76,11 +105,17 @@ class MediaRepository(
      */
     private val homeCacheTtlMs = 2 * 60 * 1000L
 
+    /**
+     * How long a Home built without the server is reused. Long enough that the pages of one
+     * browse share it, short enough that the next browse tries the server again.
+     */
+    private val offlineHomeTtlMs = 30 * 1000L
+
     @Volatile
     private var homeChildren: List<MediaItem>? = null
 
     @Volatile
-    private var homeCachedAtMs = 0L
+    private var homeExpiresAtMs = 0L
 
     suspend fun getItem(id: String): MediaItem {
         if (id in staticIds) {
@@ -96,8 +131,10 @@ class MediaRepository(
     suspend fun getContentParentId(mediaId: String): String? {
         // Letter buckets are browse scaffolding, not containers of playable siblings —
         // treat them like the static category ids so expandSingleItem never expands one.
+        // The saved queue is not a container either: tapping one track of it must not queue
+        // the whole previous session.
         return dao.getParentIds(mediaId).firstOrNull {
-            it !in staticIds && !it.startsWith(LETTER_BUCKET_PREFIX)
+            it !in staticIds && it != SAVED_QUEUE && !it.startsWith(LETTER_BUCKET_PREFIX)
         }
     }
 
@@ -142,11 +179,7 @@ class MediaRepository(
                 val entities = children.mapIndexed { index, item ->
                     item.toEntity(parentId, index)
                 }
-                // Drop whatever was cached under this parent first: insertAll only
-                // REPLACEs rows whose (mediaId, parentId) still appears in the new list,
-                // so items that dropped out would otherwise linger with stale sortOrder.
-                dao.deleteByParent(parentId)
-                dao.insertAll(entities)
+                dao.replaceChildren(mapOf(parentId to entities))
             }
             children
         } catch (e: Exception) {
@@ -157,45 +190,94 @@ class MediaRepository(
 
     /**
      * Home is always built live when the TTL has expired, then written through to Room so it
-     * still renders on a dead connection. Room is only read when the live build comes back
-     * empty, because a stale Home that never refreshes is worse than a slightly slow one.
+     * still renders on a dead connection.
+     *
+     * A build is only trusted when the server contributed to it. With the server unreachable
+     * every network section drops out and what is left is the handful of tiles built on the
+     * device, so judging the build by emptiness would serve those over a perfectly good Home
+     * in Room — and overwrite it. Such a build is never written back; the last live Home is
+     * served instead, with the resume tile (local, so always current) taken from the new build.
      */
     private suspend fun getHomeChildren(): List<MediaItem> {
         val cached = homeChildren
-        if (cached != null && SystemClock.elapsedRealtime() - homeCachedAtMs < homeCacheTtlMs) {
+        if (cached != null && SystemClock.elapsedRealtime() < homeExpiresAtMs) {
             return cached
         }
 
         // Explicitly on IO: browse futures resolve on the main dispatcher, and unlike the
         // ordinary getChildren path this one does not go through `scope`, so without this
         // every section's HTTP call dies with NetworkOnMainThreadException.
-        val fresh = try {
+        val built = try {
             withContext(Dispatchers.IO) { tree.getChildren(HOME) }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Failed to build Home", e)
             emptyList()
         }
 
-        if (fresh.isNotEmpty()) {
-            homeChildren = fresh
-            homeCachedAtMs = SystemClock.elapsedRealtime()
+        if (built.any { it.mediaId !in localHomeTiles }) {
+            remember(built, homeCacheTtlMs)
             try {
-                dao.deleteByParent(HOME)
-                dao.insertAll(fresh.mapIndexed { index, item -> item.toEntity(HOME, index) })
+                dao.replaceChildren(
+                    mapOf(HOME to built.mapIndexed { index, item -> item.toEntity(HOME, index) })
+                )
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "Failed to cache Home", e)
             }
-            return fresh
+            return built
         }
 
-        return dao.getChildrenByParent(HOME).map { it.toMediaItem() }
+        val stored = try {
+            dao.getChildrenByParent(HOME).map { it.toMediaItem() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to read cached Home", e)
+            emptyList()
+        }
+
+        Log.i(LOG_TAG, "Home built without the server; serving ${if (stored.isEmpty()) "local tiles" else "the cached Home"}")
+        val offline = if (stored.isEmpty()) {
+            built
+        } else {
+            listOfNotNull(built.firstOrNull { it.mediaId == RESUME_QUEUE }) +
+                stored.filterNot { it.mediaId == RESUME_QUEUE }
+        }
+        remember(offline, offlineHomeTtlMs)
+        return offline
+    }
+
+    private fun remember(home: List<MediaItem>, ttlMs: Long) {
+        homeChildren = home
+        homeExpiresAtMs = SystemClock.elapsedRealtime() + ttlMs
     }
 
     /** Forces the next Home browse to rebuild — the play history behind it has moved on. */
     fun invalidateHome() {
         homeChildren = null
-        homeCachedAtMs = 0L
+        homeExpiresAtMs = 0L
     }
+
+    /**
+     * Writes the tracks of the queue just set under [SAVED_QUEUE], replacing the previous
+     * queue. Runs in the repository's own scope so playback never waits on the write.
+     */
+    fun saveQueue(items: List<MediaItem>) {
+        if (items.isEmpty()) return
+        val rows = items.mapIndexed { index, item -> item.toEntity(SAVED_QUEUE, index) }
+        scope.launch {
+            try {
+                dao.replaceChildren(mapOf(SAVED_QUEUE to rows))
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to persist the queue", e)
+            }
+        }
+    }
+
+    /** The tracks of the last saved queue, in order. Room only, never the network. */
+    suspend fun getSavedQueue(): List<MediaItem> =
+        dao.getChildrenByParent(SAVED_QUEUE).map { it.toMediaItem() }
 
     suspend fun getArtistRadioTracks(artistId: String): List<MediaItem> {
         return try {
@@ -271,68 +353,98 @@ class MediaRepository(
         invalidateHome()
     }
 
+    /**
+     * Refreshes the cache from the server. Returns true only when at least one section was
+     * actually fetched from it.
+     *
+     * When every fetch succeeds the result is a complete picture of the library, so it
+     * replaces the whole cache — which is also what eventually refreshes nodes cached lazily
+     * while browsing (folders, genres, albums opened from search) that no section reaches.
+     * When anything fails, only the parents that were re-fetched are replaced and everything
+     * else keeps its last good copy: a sync at the start of a drive, while the car's
+     * connection is still coming up, must never leave less offline content than it found.
+     */
     suspend fun sync(): Boolean = syncMutex.withLock {
-        val sectionIds = tree.getActiveCategoryIds()
-        val allEntities = mutableListOf<CachedMediaItemEntity>()
-        var anySuccess = false
+        val sectionIds = tree.getActiveCategoryIds().filterNot { it in unsyncedSections }
+        val refreshed = LinkedHashMap<String, List<CachedMediaItemEntity>>()
+        var complete = true
 
         FirebaseUtils.safeLog("Sync started: ${sectionIds.size} sections")
 
         for (sectionId in sectionIds) {
             try {
                 val children = tree.getChildren(sectionId)
-                children.forEachIndexed { index, item ->
-                    allEntities.add(item.toEntity(sectionId, index))
-                    if (sectionId !in shallowSyncSections) {
-                        syncChildrenRecursively(item, allEntities)
-                    }
+                refreshed[sectionId] = children.mapIndexed { index, item -> item.toEntity(sectionId, index) }
+                if (sectionId !in shallowSyncSections) {
+                    children.forEach { complete = syncChildrenRecursively(it, refreshed) && complete }
                 }
-                anySuccess = true
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                complete = false
                 Log.e(LOG_TAG, "Failed to sync section $sectionId", e)
                 FirebaseUtils.safeSetCustomKey("sync_failed_section", sectionId)
                 FirebaseUtils.safeRecordException(e)
             }
         }
 
-        if (anySuccess) {
-            dao.deleteAll()
-            dao.insertAll(allEntities)
+        val reachedServer = sectionIds.any { it in refreshed }
+        if (reachedServer) {
+            if (complete) {
+                dao.replaceAllExcept(refreshed.values.flatten(), keepParents = keptBySync)
+            } else {
+                dao.replaceChildren(refreshed)
+            }
         }
 
-        FirebaseUtils.safeLog("Sync completed: ${allEntities.size} items, success=$anySuccess")
-        return anySuccess
+        FirebaseUtils.safeLog(
+            "Sync completed: ${refreshed.values.sumOf { it.size }} items, " +
+                "success=$reachedServer, complete=$complete"
+        )
+        return reachedServer
     }
 
+    /**
+     * Adds [item]'s children (and, for artists and folders, theirs) to [refreshed]. Returns
+     * false if any of those fetches failed, so the sync knows its picture is incomplete.
+     */
     private suspend fun syncChildrenRecursively(
         item: MediaItem,
-        allEntities: MutableList<CachedMediaItemEntity>
-    ) {
+        refreshed: MutableMap<String, List<CachedMediaItemEntity>>
+    ): Boolean {
         val mediaType = item.mediaMetadata.mediaType
         val mediaId = item.mediaId
 
-        val shouldFetchChildren = item.mediaMetadata.isBrowsable == true && (
+        // Playlists are playable rather than browsable, so the browsable check alone never
+        // let their tracks into the cache — and tapping a playlist offline needs exactly
+        // those. Album tracks are still left to cache on first play: Latest and Random would
+        // otherwise cost a request per album on every sync.
+        val isRealPlaylist = mediaType == MEDIA_TYPE_PLAYLIST &&
+                !MediaItemFactory.isShuffleId(mediaId) && !MediaItemFactory.isHomeActionId(mediaId)
+        val shouldFetchChildren = isRealPlaylist || item.mediaMetadata.isBrowsable == true && (
                 mediaType == MEDIA_TYPE_ARTIST ||
                 mediaType == MEDIA_TYPE_ALBUM ||
-                mediaType == MEDIA_TYPE_PLAYLIST ||
                 mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS
         )
 
-        if (!shouldFetchChildren) return
+        if (!shouldFetchChildren) return true
 
-        try {
+        return try {
             val children = tree.getChildren(mediaId)
-            children.forEachIndexed { index, child ->
-                allEntities.add(child.toEntity(mediaId, index))
+            refreshed[mediaId] = children.mapIndexed { index, child -> child.toEntity(mediaId, index) }
 
-                // For artists, recurse into their albums (which may contain tracks)
-                // For folders, recurse into subfolders/audiobooks
-                if (mediaType == MEDIA_TYPE_ARTIST || mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS) {
-                    syncChildrenRecursively(child, allEntities)
-                }
+            // For artists, recurse into their albums (which may contain tracks)
+            // For folders, recurse into subfolders/audiobooks
+            var complete = true
+            if (mediaType == MEDIA_TYPE_ARTIST || mediaType == MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS) {
+                children.forEach { complete = syncChildrenRecursively(it, refreshed) && complete }
             }
+            complete
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Failed to sync children for $mediaId", e)
+            false
         }
     }
 
