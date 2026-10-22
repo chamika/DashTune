@@ -72,7 +72,16 @@ class HomeSections(
         // Started first: three sections derive from it, and it is the slowest query.
         val recentTracks = async { section("recent plays") { recentlyPlayedTracks() } ?: emptyList() }
 
-        val continueListening = async { section("continue listening") { continueListening() } }
+        // Built outside any network section: it needs only the saved queue, and it is the
+        // tile that matters most when the server cannot be reached.
+        val resumeQueue = try {
+            resumeQueueTile()
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Home resume tile failed", e)
+            null
+        }
+        // Wrapped in a list: section() reads a null result as a timeout.
+        val continueBook = async { section("continue listening") { listOfNotNull(continueBookTile()) } }
         val newForYou = async { section("new for you") { newForYou(gridCount) } }
 
         val madeForYou = async {
@@ -86,7 +95,8 @@ class HomeSections(
         }
 
         buildList {
-            addAll(continueListening.await().orEmpty())
+            resumeQueue?.let { add(it) }
+            addAll(continueBook.await().orEmpty())
             addAll(madeForYou.await().orEmpty())
             addAll(newForYou.await().orEmpty())
             addAll(jumpBackIn.await().orEmpty())
@@ -110,15 +120,9 @@ class HomeSections(
     }
 
     // --- Section 1: Continue listening ---------------------------------------------------
-
-    /**
-     * The saved music queue first, then the in-progress audiobook. Either row is omitted
-     * when there is nothing to resume, and the section disappears entirely when both are.
-     */
-    private suspend fun continueListening(): List<MediaItem> = buildList {
-        resumeQueueTile()?.let { add(it) }
-        continueBookTile()?.let { add(it) }
-    }
+    //
+    // The saved music queue first, then the in-progress audiobook. Either row is omitted
+    // when there is nothing to resume, and the section disappears entirely when both are.
 
     private fun resumeQueueTile(): MediaItem? {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)

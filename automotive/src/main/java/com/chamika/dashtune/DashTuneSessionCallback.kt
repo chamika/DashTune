@@ -39,6 +39,7 @@ import com.chamika.dashtune.signin.SignInActivity
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -49,6 +50,7 @@ import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.serializer.toUUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeoutException
 
 @OptIn(UnstableApi::class)
@@ -343,6 +345,8 @@ class DashTuneSessionCallback(
         mediaItems: List<MediaItem>,
     ): ListenableFuture<List<MediaItem>> {
         Log.i(LOG_TAG, "onAddMediaItems $mediaItems")
+        // A controller can play before anything has browsed (voice, a steering-wheel button).
+        ensureTreeInitialized()
         return SuspendToFutureAdapter.launchFuture {
             try {
                 withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
@@ -369,6 +373,7 @@ class DashTuneSessionCallback(
         startPositionMs: Long,
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
         Log.i(LOG_TAG, "onSetMediaItems ${mediaItems.size} items")
+        ensureTreeInitialized()
         return SuspendToFutureAdapter.launchFuture {
             try {
                 withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
@@ -380,12 +385,20 @@ class DashTuneSessionCallback(
                 Log.e(LOG_TAG, "Failed to set media items", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "set_media_items")
                 FirebaseUtils.safeRecordException(e)
+                // Media3 drops a failed play-from-id from the head unit without a word, which
+                // left a tap looking ignored. Tell the user; the current queue is untouched.
+                mediaSession.sendError(
+                    SessionError(SessionError.ERROR_IO, service.getString(R.string.media_unavailable))
+                )
                 // Rethrow to complete the future exceptionally: the current queue keeps
                 // playing and the session stays responsive to later commands.
                 throw e
             }
         }
     }
+
+    /** A selection that resolved to no playable tracks — usually because the server could not be reached. */
+    private class NothingToPlayException(message: String) : Exception(message)
 
     private suspend fun resolveSetMediaItems(
         mediaSession: MediaSession,
@@ -397,6 +410,8 @@ class DashTuneSessionCallback(
         // would have, but on an explicit tap rather than a headunit-initiated resume.
         if (mediaItems.size == 1 && mediaItems[0].mediaId == RESUME_QUEUE) {
             val saved = loadSavedQueue()
+            if (saved.mediaItems.isEmpty()) throw NothingToPlayException("Saved queue could not be restored")
+            keepRestoredQueue(saved)
             handleAudiobookShuffle(
                 mediaSession,
                 saved.mediaItems.any {
@@ -411,6 +426,7 @@ class DashTuneSessionCallback(
         if (resolver.isSingleItemWithParent(mediaItems)) {
             val singleItem = mediaItems[0]
             val resolvedItems = resolver.expandSingleItem(singleItem)
+            if (resolvedItems.isEmpty()) throw NothingToPlayException("Nothing to play for ${singleItem.mediaId}")
 
             val isAudiobookContent = resolvedItems.any {
                 it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
@@ -449,6 +465,9 @@ class DashTuneSessionCallback(
         }
 
         val resolvedItems = resolver.resolveMediaItems(mediaItems)
+        // An empty result would replace whatever is playing with nothing and be saved as the
+        // queue to resume next drive. Failing leaves both alone.
+        if (resolvedItems.isEmpty()) throw NothingToPlayException("Nothing to play for ${mediaItems.map { it.mediaId }}")
 
         val isAudiobookContent = resolvedItems.any {
             it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
@@ -495,8 +514,11 @@ class DashTuneSessionCallback(
     }
 
     private fun savePlaylist(resolvedItems: List<MediaItem>, queueTitle: String? = null) {
+        // Never overwrite the queue to resume with nothing.
+        if (resolvedItems.isEmpty()) return
         val playlistIDs = resolvedItems.map { it.mediaId }.joinToString(",")
         Log.d(LOG_TAG, "Saving playlist $playlistIDs")
+        repository.saveQueue(resolvedItems)
 
         PreferenceManager.getDefaultSharedPreferences(service).edit {
             putString(PLAYLIST_IDS_PREF, playlistIDs)
@@ -512,8 +534,14 @@ class DashTuneSessionCallback(
     /**
      * The queue saved from the last session. Shared by the headunit's own resume callback
      * and by the Home "Continue listening" tile, so both restore the same thing.
+     *
+     * The tracks come from the copy [MediaRepository.saveQueue] keeps in Room, so a cold start
+     * restores without the network. Ids missing from it (a queue saved by an older version)
+     * are looked up individually, and whatever cannot be found is skipped rather than failing
+     * the whole restore. Returns an empty queue only when nothing could be restored.
      */
     private suspend fun loadSavedQueue(): MediaSession.MediaItemsWithStartPosition {
+        val nothing = MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
         return try {
             val prefs = PreferenceManager.getDefaultSharedPreferences(service)
 
@@ -522,40 +550,68 @@ class DashTuneSessionCallback(
                 ?.split(",")
                 ?.filter { it.isNotEmpty() }
                 ?: emptyList()
+            if (savedIds.isEmpty()) return nothing
 
-            val playableIds = savedIds.filter { service.isTrackCachedOrOnline(it) }
-            if (playableIds.size < savedIds.size) {
-                Log.i(LOG_TAG, "Skipping ${savedIds.size - playableIds.size} unplayable tracks (offline + uncached)")
+            val savedIndex = prefs.getInt(PLAYLIST_INDEX_PREF, 0).coerceIn(0, savedIds.lastIndex)
+
+            val found = ConcurrentHashMap<String, MediaItem>()
+            repository.getSavedQueue().associateByTo(found) { it.mediaId }
+
+            val missing = savedIds.filterNot { found.containsKey(it) }.distinct()
+            if (missing.isNotEmpty()) {
+                Log.i(LOG_TAG, "Looking up ${missing.size} of ${savedIds.size} saved tracks individually")
+                // Keeps whatever arrived if the deadline passes; partial beats nothing.
+                withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
+                    missing.map { id -> async { itemOrNull(id)?.let { found[id] = it } } }.awaitAll()
+                } ?: Log.w(LOG_TAG, "Playback resumption lookups timed out after ${COMMAND_TIMEOUT_MS}ms")
             }
 
-            val mediaItemsToRestore = withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
-                playableIds
-                    .map { async { repository.getItem(it) } }
-                    .awaitAll()
-            } ?: run {
-                Log.w(LOG_TAG, "Playback resumption timed out after ${COMMAND_TIMEOUT_MS}ms")
-                emptyList()
+            // Rebuilt from the saved ids, not the rows, so a track queued twice stays queued
+            // twice and the saved index still points at the same position.
+            val restored = ArrayList<MediaItem>(savedIds.size)
+            var startIndex = -1
+            var firstAfterSaved = -1
+            savedIds.forEachIndexed { index, id ->
+                val item = found[id] ?: return@forEachIndexed
+                if (index == savedIndex) startIndex = restored.size
+                if (index > savedIndex && firstAfterSaved < 0) firstAfterSaved = restored.size
+                restored += item
             }
 
-            Log.d(LOG_TAG, "Resuming playback with $mediaItemsToRestore")
-            FirebaseUtils.safeLog("Restoring playback: index=${prefs.getInt(PLAYLIST_INDEX_PREF, 0)}, trackCount=${mediaItemsToRestore.size}")
+            Log.d(LOG_TAG, "Resuming playback with ${restored.size} of ${savedIds.size} tracks")
+            FirebaseUtils.safeLog("Restoring playback: index=$savedIndex, trackCount=${restored.size}/${savedIds.size}")
 
-            if (mediaItemsToRestore.isEmpty()) {
-                MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
-            } else {
-                val savedIndex = prefs.getInt(PLAYLIST_INDEX_PREF, 0)
-                    .coerceIn(0, mediaItemsToRestore.lastIndex)
-                MediaSession.MediaItemsWithStartPosition(
-                    mediaItemsToRestore,
-                    savedIndex,
+            when {
+                restored.isEmpty() -> nothing
+                startIndex >= 0 -> MediaSession.MediaItemsWithStartPosition(
+                    restored,
+                    startIndex,
                     prefs.getLong(PLAYLIST_TRACK_POSITON_MS_PREF, 0),
                 )
+                // The track that was playing is gone: start at the next one that survived,
+                // from its beginning — the saved position belongs to the other track.
+                else -> MediaSession.MediaItemsWithStartPosition(
+                    restored,
+                    if (firstAfterSaved >= 0) firstAfterSaved else 0,
+                    0L,
+                )
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Failed to resume playback", e)
             FirebaseUtils.safeRecordException(e)
-            MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
+            nothing
         }
+    }
+
+    private suspend fun itemOrNull(id: String): MediaItem? = try {
+        repository.getItem(id)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(LOG_TAG, "Saved track $id could not be restored", e)
+        null
     }
 
     override fun onSearch(
@@ -627,7 +683,35 @@ class DashTuneSessionCallback(
         Log.i(LOG_TAG, "onPlaybackResumption")
         ensureTreeInitialized()
 
-        return SuspendToFutureAdapter.launchFuture { loadSavedQueue() }
+        // Failing, rather than returning an empty or outdated queue, is deliberate: Media3
+        // applies whatever this returns over the player's queue, then plays. A failure makes it
+        // just call play(), which leaves the queue as it is.
+        return SuspendToFutureAdapter.launchFuture {
+            val saved = loadSavedQueue()
+            // The restore can take a while on a cold start, and the user may have picked
+            // something in the meantime. Overwriting that would look like their tap did nothing.
+            check(mediaSession.player.mediaItemCount == 0) {
+                "A queue was set while the saved one was restoring; keeping it"
+            }
+            check(saved.mediaItems.isNotEmpty()) { "No saved queue could be restored" }
+            keepRestoredQueue(saved)
+            saved
+        }
+    }
+
+    /**
+     * Saves a restore that skipped tracks as the queue. The saved index follows the player, so
+     * once it plays the shorter list the index points into that list — against the old ids it
+     * would resume the wrong track next time, and Home would count the wrong total.
+     */
+    private fun keepRestoredQueue(restored: MediaSession.MediaItemsWithStartPosition) {
+        val savedIds = PreferenceManager.getDefaultSharedPreferences(service)
+            .getString(PLAYLIST_IDS_PREF, "")
+            ?.split(",")
+            ?.filter { it.isNotEmpty() }
+        if (restored.mediaItems.map { it.mediaId } != savedIds) {
+            savePlaylist(restored.mediaItems)
+        }
     }
 
     override fun onCustomCommand(
@@ -664,6 +748,7 @@ class DashTuneSessionCallback(
                             putLong("last_sync_timestamp", System.currentTimeMillis())
                         }
                         (session as MediaLibraryService.MediaLibrarySession).notifyChildrenChanged(ROOT_ID, 4, null)
+                        invalidateHome()
                         android.widget.Toast.makeText(service, R.string.library_synced, android.widget.Toast.LENGTH_SHORT).show()
                         SessionResult(SessionResult.RESULT_SUCCESS)
                     } else {

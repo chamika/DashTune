@@ -6,6 +6,7 @@ import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import com.chamika.dashtune.AlbumArtContentProvider
+import com.chamika.dashtune.data.MediaRepository.Companion.SAVED_QUEUE
 import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
@@ -16,17 +17,21 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
+import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
+import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.slot
 import kotlinx.coroutines.test.runTest
+import org.jellyfin.sdk.api.client.exception.TimeoutException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -36,6 +41,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.net.UnknownHostException
 
 @RunWith(RobolectricTestRunner::class)
 class MediaRepositorySyncTest {
@@ -90,22 +96,33 @@ class MediaRepositorySyncTest {
 
     // --- sync() tests ---
 
+    /** Every sync write goes through one of the two transactional replaces; nothing else may touch the cache. */
+    private fun verifyNoCacheWrites() {
+        coVerify(exactly = 0) { dao.replaceAllExcept(any(), any()) }
+        coVerify(exactly = 0) { dao.replaceChildren(any()) }
+        coVerify(exactly = 0) { dao.deleteAll() }
+        coVerify(exactly = 0) { dao.insertAll(any()) }
+    }
+
     @Test
-    fun `sync returns true when at least one section succeeds`() = runTest {
+    fun `a sync in which every section answers replaces the whole cache except Home and the saved queue`() = runTest {
         coEvery { tree.getActiveCategoryIds() } returns listOf(LATEST_ALBUMS)
         coEvery { tree.getChildren(LATEST_ALBUMS) } returns listOf(
             buildMediaItem("album-1", mediaType = MediaMetadata.MEDIA_TYPE_ALBUM, isBrowsable = false)
         )
+        val written = slot<List<CachedMediaItemEntity>>()
 
         val result = repository.sync()
 
         assertTrue(result)
-        coVerify { dao.deleteAll() }
-        coVerify { dao.insertAll(any()) }
+        coVerify { dao.replaceAllExcept(capture(written), listOf(HOME, SAVED_QUEUE)) }
+        assertEquals(listOf("album-1" to LATEST_ALBUMS), written.captured.map { it.mediaId to it.parentId })
+        coVerify(exactly = 0) { dao.deleteAll() }
+        coVerify(exactly = 0) { dao.replaceChildren(any()) }
     }
 
     @Test
-    fun `sync returns false when all sections fail`() = runTest {
+    fun `sync returns false and leaves the cache alone when all sections fail`() = runTest {
         coEvery { tree.getActiveCategoryIds() } returns listOf(LATEST_ALBUMS, FAVOURITES)
         coEvery { tree.getChildren(LATEST_ALBUMS) } throws RuntimeException("Network error")
         coEvery { tree.getChildren(FAVOURITES) } throws RuntimeException("Network error")
@@ -113,38 +130,97 @@ class MediaRepositorySyncTest {
         val result = repository.sync()
 
         assertFalse(result)
-        coVerify(exactly = 0) { dao.deleteAll() }
-        coVerify(exactly = 0) { dao.insertAll(any()) }
+        verifyNoCacheWrites()
     }
 
     @Test
-    fun `sync returns true when some sections fail but at least one succeeds`() = runTest {
+    fun `a partly failed sync replaces only what it re-fetched`() = runTest {
         coEvery { tree.getActiveCategoryIds() } returns listOf(LATEST_ALBUMS, FAVOURITES)
         coEvery { tree.getChildren(LATEST_ALBUMS) } throws RuntimeException("Network error")
         coEvery { tree.getChildren(FAVOURITES) } returns listOf(
             buildMediaItem("track-1")
         )
+        val written = slot<Map<String, List<CachedMediaItemEntity>>>()
 
         val result = repository.sync()
 
         assertTrue(result)
-        coVerify { dao.deleteAll() }
-        coVerify { dao.insertAll(any()) }
+        coVerify { dao.replaceChildren(capture(written)) }
+        // LATEST_ALBUMS keeps whatever it had: it is not among the replaced parents.
+        assertEquals(setOf(FAVOURITES), written.captured.keys)
+        coVerify(exactly = 0) { dao.replaceAllExcept(any(), any()) }
+        coVerify(exactly = 0) { dao.deleteAll() }
     }
 
     @Test
-    fun `sync clears existing cache before inserting new data`() = runTest {
-        coEvery { tree.getActiveCategoryIds() } returns listOf(LATEST_ALBUMS)
-        coEvery { tree.getChildren(LATEST_ALBUMS) } returns listOf(
-            buildMediaItem("album-1", mediaType = MediaMetadata.MEDIA_TYPE_ALBUM, isBrowsable = false)
+    fun `Home and the alphabet indexes are not synced and cannot pass for a successful sync`() = runTest {
+        // The field failure: with the server unreachable every Home section timed out, Home
+        // came back empty without throwing, and that counted as success — so the sync
+        // replaced the entire cache with nothing.
+        coEvery { tree.getActiveCategoryIds() } returns listOf(HOME, ARTISTS, ALBUMS, FAVOURITES)
+        coEvery { tree.getChildren(FAVOURITES) } throws
+            TimeoutException("HTTP host unreachable", UnknownHostException("server"))
+
+        val result = repository.sync()
+
+        assertFalse(result)
+        verifyNoCacheWrites()
+        coVerify(exactly = 0) { tree.getChildren(HOME) }
+        coVerify(exactly = 0) { tree.getChildren(ARTISTS) }
+        coVerify(exactly = 0) { tree.getChildren(ALBUMS) }
+    }
+
+    @Test
+    fun `a failed child fetch keeps the sync partial so that child keeps its cached rows`() = runTest {
+        val artist = buildMediaItem(
+            "artist-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_ARTIST,
+            isPlayable = false,
+            isBrowsable = true
         )
+        coEvery { tree.getActiveCategoryIds() } returns listOf(FAVOURITES)
+        coEvery { tree.getChildren(FAVOURITES) } returns listOf(artist)
+        coEvery { tree.getChildren("artist-1") } throws RuntimeException("Network error")
+        val written = slot<Map<String, List<CachedMediaItemEntity>>>()
 
-        repository.sync()
+        assertTrue(repository.sync())
 
-        coVerify(ordering = io.mockk.Ordering.ORDERED) {
-            dao.deleteAll()
-            dao.insertAll(any())
-        }
+        coVerify { dao.replaceChildren(capture(written)) }
+        assertEquals(setOf(FAVOURITES), written.captured.keys)
+        coVerify(exactly = 0) { dao.replaceAllExcept(any(), any()) }
+    }
+
+    @Test
+    fun `playlist tracks are synced although playlists are not browsable`() = runTest {
+        val playlist = buildMediaItem(
+            "playlist-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST,
+            isBrowsable = false
+        )
+        coEvery { tree.getActiveCategoryIds() } returns listOf(PLAYLISTS)
+        coEvery { tree.getChildren(PLAYLISTS) } returns listOf(playlist)
+        coEvery { tree.getChildren("playlist-1") } returns listOf(buildMediaItem("track-1"))
+        val written = slot<List<CachedMediaItemEntity>>()
+
+        assertTrue(repository.sync())
+
+        coVerify { dao.replaceAllExcept(capture(written), any()) }
+        assertTrue(written.captured.any { it.mediaId == "track-1" && it.parentId == "playlist-1" })
+    }
+
+    @Test
+    fun `shuffle pseudo-items are never expanded during sync`() = runTest {
+        val shuffle = buildMediaItem(
+            SHUFFLE_FOLDER_PREFIX + "folder-1",
+            mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST,
+            isBrowsable = false
+        )
+        coEvery { tree.getActiveCategoryIds() } returns listOf(FAVOURITES)
+        coEvery { tree.getChildren(FAVOURITES) } returns listOf(shuffle)
+
+        assertTrue(repository.sync())
+
+        coVerify(exactly = 0) { tree.getChildren(shuffle.mediaId) }
     }
 
     @Test
@@ -239,13 +315,14 @@ class MediaRepositorySyncTest {
     }
 
     @Test
-    fun `sync returns true with empty sections`() = runTest {
+    fun `a section the server answered with nothing still counts as synced`() = runTest {
         coEvery { tree.getActiveCategoryIds() } returns listOf(LATEST_ALBUMS)
         coEvery { tree.getChildren(LATEST_ALBUMS) } returns emptyList()
 
         val result = repository.sync()
 
         assertTrue(result)
+        coVerify { dao.replaceAllExcept(emptyList(), listOf(HOME, SAVED_QUEUE)) }
     }
 
     @Test
@@ -254,8 +331,9 @@ class MediaRepositorySyncTest {
 
         val result = repository.sync()
 
-        // No sections = no success (anySuccess stays false)
+        // No sections = nothing reached the server
         assertFalse(result)
+        verifyNoCacheWrites()
     }
 
     @Test
@@ -286,7 +364,7 @@ class MediaRepositorySyncTest {
 
         repository.getChildren("album-1")
 
-        coVerify { dao.insertAll(any()) }
+        coVerify { dao.replaceChildren(match { it.keys == setOf("album-1") }) }
     }
 
     @Test
@@ -299,6 +377,7 @@ class MediaRepositorySyncTest {
         repository.getChildren(ROOT_ID)
 
         coVerify(exactly = 0) { dao.insertAll(any()) }
+        coVerify(exactly = 0) { dao.replaceChildren(any()) }
     }
 
     @Test
@@ -344,8 +423,8 @@ class MediaRepositorySyncTest {
 
         repository.getChildren("album-1")
 
-        coVerify { dao.insertAll(match { entities ->
-            entities.any { it.artUri == "content://com.chamika.dashtune/test/art" }
+        coVerify { dao.replaceChildren(match { children ->
+            children["album-1"].orEmpty().any { it.artUri == "content://com.chamika.dashtune/test/art" }
         }) }
     }
 

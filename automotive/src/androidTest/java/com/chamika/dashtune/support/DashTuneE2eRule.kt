@@ -123,6 +123,10 @@ class DashTuneE2eRule(
     /** Drops the Room browse cache mid-test, forcing the next browse back to the network. */
     fun clearBrowseCache() = runBlocking { database.mediaCacheDao().deleteAll() }
 
+    /** The ids Room holds under [parentId], in order — what the app could serve offline. */
+    fun cachedChildIds(parentId: String): List<String> =
+        runBlocking { database.mediaCacheDao().getChildrenByParent(parentId) }.map { it.mediaId }
+
     private fun seedPreferences() {
         PreferenceManager.getDefaultSharedPreferences(context).edit().apply {
             putStringSet("browse_categories", categories)

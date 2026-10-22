@@ -45,6 +45,7 @@ import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.api.client.extensions.userViewsApi
 import org.jellyfin.sdk.model.api.BaseItemDto
+import org.jellyfin.sdk.model.api.BaseItemDtoQueryResult
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.CollectionType
 import org.jellyfin.sdk.model.api.ItemFilter
@@ -52,12 +53,23 @@ import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.SortOrder
 import org.jellyfin.sdk.model.serializer.toUUID
 import java.net.ConnectException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
 
 private const val MAX_ITEMS = 120
 private const val SHUFFLE_MAX_ITEMS = 500
 private const val RADIO_MAX_ITEMS = 200
 private const val REQUEST_HARD_TIMEOUT_MS = 10_000L
+
+/**
+ * Children are fetched this many at a time. The SDK's request timeout covers reading the
+ * whole body, and a playlist of several hundred tracks in one response does not download
+ * inside it on a weak car connection — so it failed every time and was never cached.
+ */
+internal const val CHILDREN_PAGE_SIZE = 200
+
+/** Upper bound on pages for one parent, so a server that misreports its totals cannot loop us. */
+private const val MAX_CHILDREN_PAGES = 50
 
 class JellyfinMediaTree(
     private val context: Context,
@@ -97,9 +109,7 @@ class JellyfinMediaTree(
                 // A caller's outer timeout cancelled us — propagate, never retry.
                 throw e
             } catch (e: Exception) {
-                if (e is TimeoutException || e is ConnectException ||
-                    e.cause is TimeoutException || e.cause is ConnectException
-                ) {
+                if (isRetryable(e)) {
                     lastException = e
                     if (attempt < maxRetries) {
                         val delayMs = 1000L * (attempt + 1)
@@ -113,6 +123,17 @@ class JellyfinMediaTree(
         }
         throw lastException!!
     }
+
+    /**
+     * Worth another attempt: our own hard timeout, a refused connection, or a DNS lookup that
+     * failed — typical while the car's connection is still coming up. The SDK wraps all of
+     * these in its own TimeoutException, so the whole cause chain is searched. A request that
+     * already sat through the SDK's own read timeout is not retried: it has spent its budget.
+     */
+    private fun isRetryable(e: Throwable): Boolean =
+        generateSequence(e) { it.cause }.take(10).any {
+            it is TimeoutException || it is ConnectException || it is UnknownHostException
+        }
 
     suspend fun getItem(id: String): MediaItem {
         if (mediaItems.getIfPresent(id) == null) {
@@ -462,26 +483,28 @@ class JellyfinMediaTree(
             sortBy = listOf(ItemSortBy.DEFAULT)
         }
 
-        val children = retryOnFailure {
-            val response = api.itemsApi.getItems(
-                sortBy = sortBy,
-                parentId = id.toUUID()
-            )
-
-            response.content.items.mapNotNull {
-                try {
-                    val item = itemFactory.create(
-                        it,
-                        parent = id,
-                        isAudiobook = isAudiobook,
-                        isFolderBrowse = isFolderBrowse
-                    )
-                    mediaItems.put(item.mediaId, item)
-                    item
-                } catch (e: UnsupportedOperationException) {
-                    Log.w(LOG_TAG, "Skipping unsupported item type: ${it.type}")
-                    null
-                }
+        val children = fetchAllPages { startIndex ->
+            retryOnFailure {
+                api.itemsApi.getItems(
+                    sortBy = sortBy,
+                    parentId = id.toUUID(),
+                    startIndex = startIndex,
+                    limit = CHILDREN_PAGE_SIZE
+                ).content
+            }
+        }.mapNotNull {
+            try {
+                val item = itemFactory.create(
+                    it,
+                    parent = id,
+                    isAudiobook = isAudiobook,
+                    isFolderBrowse = isFolderBrowse
+                )
+                mediaItems.put(item.mediaId, item)
+                item
+            } catch (e: UnsupportedOperationException) {
+                Log.w(LOG_TAG, "Skipping unsupported item type: ${it.type}")
+                null
             }
         }
 
@@ -492,6 +515,30 @@ class JellyfinMediaTree(
         }
 
         return children
+    }
+
+    /**
+     * Collects every page of a children query. Stops on a short page, at the reported total,
+     * or when the server answered as if it ignored paging — a page larger than asked for, or
+     * one that does not start where it was asked to (keeping what came before it).
+     */
+    private suspend fun fetchAllPages(
+        fetchPage: suspend (startIndex: Int) -> BaseItemDtoQueryResult
+    ): List<BaseItemDto> {
+        val all = mutableListOf<BaseItemDto>()
+        repeat(MAX_CHILDREN_PAGES) {
+            val start = all.size
+            val page = fetchPage(start)
+            if (start > 0 && page.startIndex != start) return all
+            all += page.items
+            // A total of 0 means the server did not count, not that there is nothing more.
+            val reachedTotal = page.totalRecordCount > 0 && all.size >= page.totalRecordCount
+            if (page.items.size != CHILDREN_PAGE_SIZE || reachedTotal) {
+                return all
+            }
+        }
+        Log.w(LOG_TAG, "Stopped paging after $MAX_CHILDREN_PAGES pages (${all.size} items)")
+        return all
     }
 
     suspend fun getShuffledTracks(folderId: String): List<MediaItem> = retryOnFailure {

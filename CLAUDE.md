@@ -77,6 +77,7 @@ automotive/src/main/java/com/chamika/dashtune/
 ├── CommandButtons.kt               # Shuffle/repeat command button definitions
 ├── Constants.kt                    # App constants (LOG_TAG)
 ├── FirebaseUtils.kt                # Safe Firebase Analytics/Crashlytics wrapper
+├── FocusDenialRetry.kt             # Re-asks when audio focus is refused at play()
 ├── auth/
 │   ├── Authenticator.kt            # Android AccountAuthenticator
 │   ├── AuthenticatorService.kt     # Authenticator bound service
@@ -131,6 +132,17 @@ automotive/src/main/java/com/chamika/dashtune/
 - Cache size configurable: 100MB - 2GB (default 200MB)
 - On track change, prefetches next 5 tracks via `DownloadManager`
 - Playback position saved every 1s, restored on playback resumption
+- Room (`MediaRepository`) caches browse results. `sync()` runs on "network available" when the
+  last one is over 6h old, i.e. in the car's flaky first minute after a long park. It counts a
+  section as synced only if the server answered it, and never syncs Home or the Artists/Albums
+  letter indexes (they cannot fail, so they used to pass a sync that reached nothing and the
+  cache was wiped). A complete sync replaces the whole cache except `HOME_ID` and
+  `SAVED_QUEUE_ID`; a partial one replaces only the parents it re-fetched. Writes go through the
+  DAO's `@Transaction` replaces. Playlist tracks are synced; album tracks cache on first play.
+- Container children are fetched in pages of 200 (`JellyfinMediaTree.fetchAllPages`): the SDK's
+  request timeout covers the whole body, so one response for a long playlist never finished.
+- `retryOnFailure` retries refused connections and DNS failures (searching the whole cause chain,
+  since the SDK wraps them), not requests that already sat through the read timeout.
 
 ### Home Tab
 - One browse node (`HOME_ID`) whose children carry `EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE`, which the
@@ -158,10 +170,13 @@ automotive/src/main/java/com/chamika/dashtune/
 - The shuffle tiles are ordinary grid items whose artwork (`art_shuffle`, `art_favourites`) is a
   full-bleed vector carrying its own dark tile. `CATEGORY_GRID_ITEM` was tried first and is wrong
   here: it draws a bare tinted icon with no tile, so the tile read as a hole in a row of albums.
-- Home is cached in memory for 2 minutes and written through to Room for offline. It is invalidated
-  when playback stops and when a queue is set, since four of the five sections come from listening
-  history. `BrowseCategoriesMigration` adds Home to an existing user's tabs once, dropping the last
-  tab if that would exceed four.
+- Home is cached in memory for 2 minutes and written through to Room for offline. A build only
+  counts if the server contributed a tile; one made only of local tiles (resume, the three
+  shuffles) is never written, and the last Room copy is served instead with the current resume
+  tile swapped in (kept 30s in memory). The resume tile is built outside every network section.
+  Home is invalidated when a listen stops (not while rebuffering), when a queue is set, when the
+  network comes back and after a successful sync. `BrowseCategoriesMigration` adds Home to an
+  existing user's tabs once, dropping the last tab if that would exceed four.
 
 ### Audiobook Support
 - `MediaItemFactory.forAudiobook()` creates browsable/playable items with `IS_AUDIOBOOK_KEY` metadata flag
@@ -174,8 +189,16 @@ automotive/src/main/java/com/chamika/dashtune/
 - `MediaRepository` caches audiobook items in Room DB with parent relationships for offline browsing
 
 ### Playback State Persistence
-- Playlist track IDs, current index, position, repeat mode, shuffle state saved to SharedPreferences
-- Restored via `onPlaybackResumption()` callback
+- Playlist track IDs, current index, position, repeat mode, shuffle state saved to SharedPreferences.
+  The queue's tracks are also written to Room under `SAVED_QUEUE_ID`, so a cold start restores
+  without the network (a few hundred per-track lookups cannot finish in the 10s timeout).
+- Restored via `onPlaybackResumption()`. Missing tracks are skipped, not fatal; the start is
+  matched by saved position. It fails rather than returning an empty queue, or a queue the user
+  replaced while it was restoring, because Media3 applies the result over the player's queue.
+- A selection that resolves to no tracks fails and calls `sendError` (the head unit shows a
+  message) instead of clearing the player and saving an empty queue.
+- `FocusDenialRetry` re-asks a few times when audio focus is refused right at play() (ExoPlayer
+  otherwise drops playWhenReady silently); later focus losses are left alone.
 
 ## Key Jellyfin APIs Used
 - `userLibraryApi` - Browse library, latest items, favourites, get item userData
