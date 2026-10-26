@@ -120,6 +120,16 @@ class DashTuneE2eRule(
             .get(30, TimeUnit.SECONDS)
     }
 
+    /**
+     * Signs in again the way the sign-in screen does: store the account's token, then send
+     * the login command. Needed after a 401, which drops the token.
+     */
+    fun signInAgain() {
+        JellyfinAccountManager(AccountManager.get(context))
+            .storeAccount(server.baseUrl, TEST_USER, TEST_TOKEN)
+        applyLogin()
+    }
+
     /** Drops the Room browse cache mid-test, forcing the next browse back to the network. */
     fun clearBrowseCache() = runBlocking { database.mediaCacheDao().deleteAll() }
 

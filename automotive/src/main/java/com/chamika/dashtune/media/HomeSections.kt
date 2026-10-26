@@ -7,14 +7,17 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaConstants
 import androidx.preference.PreferenceManager
+import com.chamika.dashtune.ApiErrors
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_IDS_PREF
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_INDEX_PREF
 import com.chamika.dashtune.DashTuneSessionCallback.Companion.PLAYLIST_TITLE_PREF
 import com.chamika.dashtune.R
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.artistsApi
@@ -44,7 +47,9 @@ import org.jellyfin.sdk.model.api.SortOrder
 class HomeSections(
     private val context: Context,
     private val api: ApiClient,
-    private val itemFactory: MediaItemFactory
+    private val itemFactory: MediaItemFactory,
+    /** Told when the server refuses our token; a failed section is otherwise silent. */
+    private val onUnauthorized: () -> Unit = {}
 ) {
 
     companion object {
@@ -109,13 +114,15 @@ class HomeSections(
      * intact — a partial Home is far better than an error screen in a moving car.
      */
     private suspend fun <T> section(name: String, block: suspend () -> T): T? = try {
-        val result = withTimeoutOrNull(SECTION_TIMEOUT_MS) { block() }
+        // IO, because the SDK reads each response body on the thread that resumes it.
+        val result = withContext(Dispatchers.IO) { withTimeoutOrNull(SECTION_TIMEOUT_MS) { block() } }
         if (result == null) Log.w(LOG_TAG, "Home section '$name' timed out")
         result
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         Log.w(LOG_TAG, "Home section '$name' failed", e)
+        if (ApiErrors.isUnauthorized(e)) onUnauthorized()
         null
     }
 

@@ -25,11 +25,18 @@ class JellyfinAccountManager(private val accountManager: AccountManager) {
         get() = token != null
 
     fun storeAccount(server: String, username: String, token: String): Account {
-        var account = accountManager.getAccountsByType(ACCOUNT_TYPE).firstOrNull {
+        val existing = accountManager.getAccountsByType(ACCOUNT_TYPE)
+        var account = existing.firstOrNull {
             // getUserData can return null; calling .equals() on it directly would NPE
             accountManager.getUserData(it, USERDATA_SERVER_KEY) == server &&
                     it.name == username
         }
+
+        // The app holds one account, and every getter reads the first one. Any other — kept
+        // by invalidateToken() after a 401, then a sign-in as another user or with the URL
+        // typed differently — could come first and leave the app signed out after a
+        // successful sign-in.
+        existing.filter { it != account }.forEach { accountManager.removeAccountExplicitly(it) }
 
         if (account == null) {
             account = Account(username, ACCOUNT_TYPE)
@@ -43,6 +50,14 @@ class JellyfinAccountManager(private val accountManager: AccountManager) {
         accountManager.setAuthToken(account, TOKEN_TYPE, token)
 
         return account
+    }
+
+    /**
+     * Forgets a token the server no longer accepts. The account stays, so [isAuthenticated]
+     * turns false and signing in again stores the new token on the same account.
+     */
+    fun invalidateToken() {
+        token?.let { accountManager.invalidateAuthToken(ACCOUNT_TYPE, it) }
     }
 
     fun logout() {

@@ -235,4 +235,83 @@ class DashTuneMusicServiceTest {
     fun `isAudiobookTrack returns false for null item`() {
         assertFalse(DashTuneMusicService.isAudiobookTrack(null))
     }
+
+    // --- AudioTrack init retry ---
+
+    @Test
+    fun `an audio output that could not be opened is recognised`() {
+        assertTrue(DashTuneMusicService.isAudioTrackInitError(PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED))
+        assertFalse(DashTuneMusicService.isAudioTrackInitError(PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED))
+        assertFalse(DashTuneMusicService.isAudioTrackInitError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED))
+    }
+
+    private val now = 1_800_000_000_000L
+
+    // --- Restoring the queue after the process was killed ---
+
+    private val playingMomentsAgo = now - 40_000L
+
+    private fun exit(reason: Int, at: Long = now - 30_000L) =
+        ExitReasonLogger.LastExit(reason, ExitReasonLogger.reasonName(reason), null, at)
+
+    @Test
+    fun `a listen killed by the system is restored`() {
+        assertTrue(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_LOW_MEMORY), playingMomentsAgo, now
+            )
+        )
+        assertTrue(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_SIGNALED), playingMomentsAgo, now
+            )
+        )
+    }
+
+    @Test
+    fun `a force stop or our own exit is not restored`() {
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_USER_REQUESTED), playingMomentsAgo, now
+            )
+        )
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_EXIT_SELF), playingMomentsAgo, now
+            )
+        )
+    }
+
+    @Test
+    fun `an exit from before the last listen belongs to an older process`() {
+        // Played in this process after an older one was killed: that record says nothing
+        // about this listen.
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_LOW_MEMORY, at = playingMomentsAgo - 60_000L),
+                playingMomentsAgo,
+                now
+            )
+        )
+    }
+
+    @Test
+    fun `an old listen is not restored`() {
+        val longAgo = now - DashTuneMusicService.RESTORE_AFTER_EXIT_WINDOW_MS - 1
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_LOW_MEMORY, at = longAgo + 1), longAgo, now
+            )
+        )
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_LOW_MEMORY), 0L, now
+            )
+        )
+    }
+
+    @Test
+    fun `without an exit record nothing is restored`() {
+        assertFalse(DashTuneMusicService.shouldRestoreQueueAfterExit(null, playingMomentsAgo, now))
+    }
 }

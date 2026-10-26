@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import com.chamika.dashtune.DashTuneMusicService
+import com.chamika.dashtune.NetworkSyncScheduler
 import androidx.preference.PreferenceManager
 import com.chamika.dashtune.AlbumArtContentProvider
 import com.chamika.dashtune.auth.JellyfinAccountManager
@@ -42,6 +43,7 @@ class SettingsViewModel @Inject constructor(
         }
         PreferenceManager.getDefaultSharedPreferences(context).edit().apply {
             remove("last_sync_timestamp")
+            remove(NetworkSyncScheduler.LAST_SYNC_ATTEMPT_PREF)
             apply()
         }
         context.startService(Intent(context, DashTuneMusicService::class.java).apply {
@@ -66,6 +68,8 @@ class SettingsViewModel @Inject constructor(
             remove("playlistIndex")
             remove("playlistTrackPositionMs")
             remove("last_sync_timestamp")
+            remove(NetworkSyncScheduler.LAST_SYNC_ATTEMPT_PREF)
+            remove(DashTuneMusicService.LAST_PLAYING_AT_PREF)
             remove("repeat_mode")
             remove("shuffle_enabled")
             apply()

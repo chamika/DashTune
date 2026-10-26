@@ -44,11 +44,13 @@ import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpClientOptions
@@ -123,6 +125,45 @@ class DashTuneMusicService : MediaLibraryService() {
             errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
                     errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
 
+        /**
+         * One more try, after [AUDIO_TRACK_INIT_RETRY_DELAY_MS], when the audio output could not
+         * be opened. Some head units refuse an AudioTrack while their audio stack is busy (seen
+         * on an LG unit, Android 12), and skipping on would fail the same way on every track.
+         */
+        internal const val MAX_AUDIO_TRACK_INIT_RETRIES = 1
+        internal const val AUDIO_TRACK_INIT_RETRY_DELAY_MS = 2_000L
+
+        internal fun isAudioTrackInitError(errorCode: Int): Boolean =
+            errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED
+
+        /** When it was last seen playing, so a restart can tell a killed listen from an old one. */
+        internal const val LAST_PLAYING_AT_PREF = "last_playing_at"
+
+        /** How recently it must have been playing for a restart to put the queue back. */
+        internal const val RESTORE_AFTER_EXIT_WINDOW_MS = 5 * 60 * 1000L
+
+        /** A clock that went backwards (a car's RTC) counts as long ago, not as recent. */
+        private fun within(now: Long, then: Long, windowMs: Long): Boolean =
+            then > 0 && now - then in 0..windowMs
+
+        /**
+         * Whether a fresh process should put the saved queue back on the player (paused): only
+         * when the last one was killed, not stopped on purpose, and died while it was playing
+         * or moments after. An exit from before the last listen belongs to an older process.
+         */
+        internal fun shouldRestoreQueueAfterExit(exit: ExitReasonLogger.LastExit?, lastPlayingAt: Long, now: Long): Boolean =
+            exit != null && ExitReasonLogger.isUnexpected(exit.reason) &&
+                    exit.timestamp >= lastPlayingAt &&
+                    within(now, lastPlayingAt, RESTORE_AFTER_EXIT_WINDOW_MS)
+
+        /**
+         * The exit record describes the previous process, and stays the same for this one's
+         * whole life — but the service can be destroyed and created again within it. Only the
+         * first creation may act on the record.
+         */
+        @Volatile
+        private var lastExitHandled = false
+
         /** Converts a playback position in milliseconds to Jellyfin's 100-ns tick units. */
         internal fun msToTicks(positionMs: Long): Long = positionMs * MILLISECONDS_TO_TICKS
 
@@ -179,12 +220,16 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var playerListener: Player.Listener
     private lateinit var focusRecovery: Runnable
     private lateinit var networkErrorRetry: Runnable
+    private lateinit var audioTrackRetry: Runnable
     private var networkErrorRetries = 0
+    private var audioTrackInitRetries = 0
     private var consecutiveErrorSkips = 0
     private lateinit var focusDenialRetry: FocusDenialRetry
 
     private lateinit var connectivityManager: ConnectivityManager
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    private lateinit var networkSync: NetworkSyncScheduler
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -297,6 +342,20 @@ class DashTuneMusicService : MediaLibraryService() {
                 FirebaseUtils.safeSetCustomKey("failed_track_id", failedId ?: "")
                 FirebaseUtils.safeRecordException(error)
 
+                if (isAudioTrackInitError(error.errorCode) &&
+                    audioTrackInitRetries < MAX_AUDIO_TRACK_INIT_RETRIES
+                ) {
+                    audioTrackInitRetries++
+                    Log.w(LOG_TAG, "Audio output could not be opened; retrying current item")
+                    FirebaseUtils.safeLog("AudioTrack init failed; retrying current item")
+                    handler.removeCallbacks(audioTrackRetry)
+                    handler.postDelayed(audioTrackRetry, AUDIO_TRACK_INIT_RETRY_DELAY_MS)
+                    return
+                }
+                // Each item gets its own retry: when this one is skipped, the next starts fresh.
+                // consecutiveErrorSkips still bounds a queue in which nothing can play.
+                audioTrackInitRetries = 0
+
                 if (isTransientNetworkError(error.errorCode) &&
                     networkErrorRetries < MAX_NETWORK_ERROR_RETRIES
                 ) {
@@ -360,6 +419,7 @@ class DashTuneMusicService : MediaLibraryService() {
                     FirebaseUtils.safeSetCustomKey("is_playing", player.isPlaying)
                     if (player.isPlaying) {
                         networkErrorRetries = 0
+                        audioTrackInitRetries = 0
                         consecutiveErrorSkips = 0
                         startPlaybackPoll()
                         if (isPlayingAudiobook && player.currentMediaItem != null) {
@@ -425,6 +485,7 @@ class DashTuneMusicService : MediaLibraryService() {
 
                 PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService).edit {
                     putLong(PLAYLIST_TRACK_POSITON_MS_PREF, currentPlaybackTime)
+                    putLong(LAST_PLAYING_AT_PREF, System.currentTimeMillis())
                 }
                 handler.postDelayed(playbackPoll, 1000)
             }
@@ -464,6 +525,15 @@ class DashTuneMusicService : MediaLibraryService() {
             }
         }
 
+        audioTrackRetry = Runnable {
+            val p = mediaLibrarySession.player
+            // prepare() clears the error and reopens the audio output at the failed position.
+            if (p.playbackState == Player.STATE_IDLE && p.playerError != null) {
+                Log.i(LOG_TAG, "Retrying playback after the audio output failed to open")
+                p.prepare()
+            }
+        }
+
         callback = DashTuneSessionCallback(this, accountManager, jellyfinApi, mediaCacheDao)
 
         mediaLibrarySession = MediaLibrarySession.Builder(this, player, callback)
@@ -476,6 +546,30 @@ class DashTuneMusicService : MediaLibraryService() {
         if (accountManager.isAuthenticated) {
             onLogin()
         }
+
+        if (!lastExitHandled) {
+            lastExitHandled = true
+            restoreQueueAfterUnexpectedExit(ExitReasonLogger.readAndLog(this))
+        }
+
+        networkSync = NetworkSyncScheduler(
+            scope = serviceScope,
+            prefs = PreferenceManager.getDefaultSharedPreferences(this),
+            isSignedIn = { accountManager.isAuthenticated },
+            isLibraryReady = { callback.isLibraryReady },
+            sync = { callback.sync() },
+            onSynced = {
+                mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
+                // A successful sync proves the server is reachable again.
+                callback.invalidateHome()
+                Toast.makeText(this, R.string.library_synced, Toast.LENGTH_SHORT).show()
+            },
+            log = { message ->
+                // Crashlytics is off in debug builds, so logcat too.
+                Log.i(LOG_TAG, message)
+                FirebaseUtils.safeLog(message)
+            },
+        )
 
         connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val networkRequest = NetworkRequest.Builder()
@@ -497,35 +591,48 @@ class DashTuneMusicService : MediaLibraryService() {
                 // Home may have been built while the server was unreachable. This callback
                 // runs on a ConnectivityManager thread; the session must be told on main.
                 handler.post { if (::callback.isInitialized) callback.invalidateHome() }
+                handler.post { networkSync.onAvailable(network) }
+            }
 
-                val prefs = PreferenceManager.getDefaultSharedPreferences(this@DashTuneMusicService)
-                val lastSync = prefs.getLong("last_sync_timestamp", 0L)
-                val sixHoursMs = 6 * 60 * 60 * 1000L
-                val syncNeeded = System.currentTimeMillis() - lastSync > sixHoursMs
-
-                if (syncNeeded) {
-                    FirebaseUtils.safeLog("Network available: sync triggered")
-                    serviceScope.launch {
-                        val success = callback.sync()
-                        if (success) {
-                            prefs.edit { putLong("last_sync_timestamp", System.currentTimeMillis()) }
-                            mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
-                            // A successful sync proves the server is reachable again.
-                            callback.invalidateHome()
-                            Toast.makeText(
-                                this@DashTuneMusicService,
-                                R.string.library_synced,
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    }
-                } else {
-                    FirebaseUtils.safeLog("Network available: sync skipped (ran recently)")
+            // Sync waits for a validated network; see NetworkSyncScheduler.
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    handler.post { networkSync.onValidated(network) }
                 }
+            }
+
+            override fun onLost(network: Network) {
+                handler.post { networkSync.onLost(network) }
             }
         }
 
         connectivityManager.registerNetworkCallback(networkRequest, networkCallback!!)
+    }
+
+    /**
+     * A process killed mid-listen came back with an empty player, so the head unit had nothing
+     * to resume and the queue had to be found again on Home. Put it back, paused at the
+     * saved position: one press of Play carries on, and nothing starts playing by itself.
+     */
+    private fun restoreQueueAfterUnexpectedExit(lastExit: ExitReasonLogger.LastExit?) {
+        if (!accountManager.isAuthenticated) return
+        val lastPlayingAt = PreferenceManager.getDefaultSharedPreferences(this)
+            .getLong(LAST_PLAYING_AT_PREF, 0L)
+        if (!shouldRestoreQueueAfterExit(lastExit, lastPlayingAt, System.currentTimeMillis())) return
+
+        serviceScope.launch {
+            try {
+                if (callback.restoreSavedQueuePaused(mediaLibrarySession)) {
+                    Log.i(LOG_TAG, "Restored queue after unexpected exit (${lastExit?.reasonName})")
+                    FirebaseUtils.safeLog("Restored queue after unexpected exit (${lastExit?.reasonName})")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Could not restore the queue after an unexpected exit", e)
+                FirebaseUtils.safeRecordException(e)
+            }
+        }
     }
 
     private fun startPlaybackPoll() {
@@ -592,6 +699,7 @@ class DashTuneMusicService : MediaLibraryService() {
         handler.removeCallbacks(audiobookPositionReporter)
         handler.removeCallbacks(focusRecovery)
         handler.removeCallbacks(networkErrorRetry)
+        handler.removeCallbacks(audioTrackRetry)
 
         try {
             downloadManager.removeListener(downloadListener)
@@ -607,6 +715,7 @@ class DashTuneMusicService : MediaLibraryService() {
         }
 
         networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        if (::networkSync.isInitialized) networkSync.release()
         PreferenceManager.getDefaultSharedPreferences(this)
             .unregisterOnSharedPreferenceChangeListener(prefsListener)
         serviceScope.cancel()
@@ -763,7 +872,7 @@ class DashTuneMusicService : MediaLibraryService() {
         val positionMs = if (currentTrack != null) currentPlaybackTime else player.currentPosition
         val ticks = msToTicks(positionMs)
         Log.i(LOG_TAG, "Audiobook stopped: $mediaId at ${positionMs}ms")
-        serviceScope.launch {
+        serviceScope.launch(Dispatchers.IO) {
             try {
                 jellyfinApi.itemsApi.updateItemUserData(
                     itemId = mediaId.toUUID(),
@@ -783,7 +892,7 @@ class DashTuneMusicService : MediaLibraryService() {
         val positionMs = currentPlaybackTime
         val ticks = msToTicks(positionMs)
         Log.d(LOG_TAG, "Audiobook progress: ${track.mediaId} at ${positionMs}ms")
-        serviceScope.launch {
+        serviceScope.launch(Dispatchers.IO) {
             try {
                 jellyfinApi.itemsApi.updateItemUserData(
                     itemId = track.mediaId.toUUID(),
@@ -798,7 +907,7 @@ class DashTuneMusicService : MediaLibraryService() {
     private fun reportAudiobookStart(player: Player) {
         val mediaId = player.currentMediaItem?.mediaId ?: return
         Log.i(LOG_TAG, "Audiobook started: $mediaId")
-        serviceScope.launch {
+        serviceScope.launch(Dispatchers.IO) {
             try {
                 jellyfinApi.playStateApi.reportPlaybackStart(
                     PlaybackStartInfo(
@@ -818,18 +927,12 @@ class DashTuneMusicService : MediaLibraryService() {
     }
 
     private suspend fun reportPlayback(player: Player) {
-        if (currentTrack != null) {
-            Log.i(LOG_TAG, "Reporting playback stopped: $currentPlaybackTime")
-            jellyfinApi.playStateApi.reportPlaybackStopped(
-                PlaybackStopInfo(
-                    itemId = currentTrack!!.mediaId.toUUID(),
-                    positionTicks = MILLISECONDS_TO_TICKS * currentPlaybackTime,
-                    failed = false
-                )
-            )
-        }
-
-        if (player.currentMediaItem != null) {
+        // Player state is read here, on main; the reports go out on IO, because the SDK
+        // reads each response body on whichever thread resumes it.
+        val stoppedId = currentTrack?.mediaId
+        val stoppedPositionMs = currentPlaybackTime
+        val startedId = player.currentMediaItem?.mediaId
+        if (startedId != null) {
             val exoPlayer = player as ExoPlayer
             val format = exoPlayer.audioFormat
             val formatString = "${format?.containerMimeType} at ${format?.averageBitrate} bps"
@@ -838,17 +941,33 @@ class DashTuneMusicService : MediaLibraryService() {
                 LOG_TAG,
                 "Playing $formatString: ${exoPlayer.currentMediaItem?.localConfiguration?.uri}"
             )
-            jellyfinApi.playStateApi.reportPlaybackStart(
-                PlaybackStartInfo(
-                    itemId = player.currentMediaItem!!.mediaId.toUUID(),
-                    canSeek = true,
-                    isPaused = false,
-                    isMuted = false,
-                    playMethod = PlayMethod.DIRECT_PLAY,
-                    repeatMode = RepeatMode.REPEAT_NONE,
-                    playbackOrder = PlaybackOrder.DEFAULT
+        }
+
+        withContext(Dispatchers.IO) {
+            if (stoppedId != null) {
+                Log.i(LOG_TAG, "Reporting playback stopped: $stoppedPositionMs")
+                jellyfinApi.playStateApi.reportPlaybackStopped(
+                    PlaybackStopInfo(
+                        itemId = stoppedId.toUUID(),
+                        positionTicks = MILLISECONDS_TO_TICKS * stoppedPositionMs,
+                        failed = false
+                    )
                 )
-            )
+            }
+
+            if (startedId != null) {
+                jellyfinApi.playStateApi.reportPlaybackStart(
+                    PlaybackStartInfo(
+                        itemId = startedId.toUUID(),
+                        canSeek = true,
+                        isPaused = false,
+                        isMuted = false,
+                        playMethod = PlayMethod.DIRECT_PLAY,
+                        repeatMode = RepeatMode.REPEAT_NONE,
+                        playbackOrder = PlaybackOrder.DEFAULT
+                    )
+                )
+            }
         }
     }
 

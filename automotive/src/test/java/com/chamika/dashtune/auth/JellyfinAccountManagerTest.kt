@@ -211,4 +211,51 @@ class JellyfinAccountManagerTest {
         assertTrue(JellyfinAccountManager.USERDATA_SERVER_KEY.startsWith(JellyfinAccountManager.ACCOUNT_TYPE))
         assertTrue(JellyfinAccountManager.USERDATA_SERVER_KEY.endsWith("server"))
     }
+
+    // --- invalidateToken ---
+
+    @Test
+    fun `invalidateToken drops the token but keeps the account and its server`() {
+        val account = Account("user", JellyfinAccountManager.ACCOUNT_TYPE)
+        every { accountManager.getAccountsByType(any()) } returns arrayOf(account)
+        every { accountManager.peekAuthToken(account, JellyfinAccountManager.TOKEN_TYPE) } returns "dead-token"
+
+        jellyfinAccountManager.invalidateToken()
+
+        verify { accountManager.invalidateAuthToken(JellyfinAccountManager.ACCOUNT_TYPE, "dead-token") }
+        verify(exactly = 0) { accountManager.removeAccountExplicitly(any()) }
+    }
+
+    @Test
+    fun `invalidateToken with no token does nothing`() {
+        every { accountManager.getAccountsByType(any()) } returns emptyArray()
+
+        jellyfinAccountManager.invalidateToken()
+
+        verify(exactly = 0) { accountManager.invalidateAuthToken(any(), any()) }
+    }
+
+    @Test
+    fun `storeAccount removes any other account so the new one is the one read`() {
+        val stale = Account("alice", JellyfinAccountManager.ACCOUNT_TYPE)
+        every { accountManager.getAccountsByType(JellyfinAccountManager.ACCOUNT_TYPE) } returns arrayOf(stale)
+        every { accountManager.getUserData(stale, JellyfinAccountManager.USERDATA_SERVER_KEY) } returns "http://server"
+
+        jellyfinAccountManager.storeAccount("http://server", "bob", "bob-token")
+
+        verify { accountManager.removeAccountExplicitly(stale) }
+        verify { accountManager.addAccountExplicitly(Account("bob", JellyfinAccountManager.ACCOUNT_TYPE), any(), any()) }
+    }
+
+    @Test
+    fun `storeAccount keeps the account it reuses`() {
+        val same = Account("alice", JellyfinAccountManager.ACCOUNT_TYPE)
+        every { accountManager.getAccountsByType(JellyfinAccountManager.ACCOUNT_TYPE) } returns arrayOf(same)
+        every { accountManager.getUserData(same, JellyfinAccountManager.USERDATA_SERVER_KEY) } returns "http://server"
+
+        jellyfinAccountManager.storeAccount("http://server", "alice", "new-token")
+
+        verify(exactly = 0) { accountManager.removeAccountExplicitly(any()) }
+        verify { accountManager.setAuthToken(same, JellyfinAccountManager.TOKEN_TYPE, "new-token") }
+    }
 }
