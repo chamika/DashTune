@@ -49,7 +49,7 @@ class HomeSections(
     private val api: ApiClient,
     private val itemFactory: MediaItemFactory,
     /** Told when the server refuses our token; a failed section is otherwise silent. */
-    private val onUnauthorized: suspend () -> Unit = {}
+    private val onUnauthorized: () -> Unit = {}
 ) {
 
     companion object {

@@ -48,9 +48,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.Jellyfin
@@ -138,23 +136,8 @@ class DashTuneMusicService : MediaLibraryService() {
         internal fun isAudioTrackInitError(errorCode: Int): Boolean =
             errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED
 
-        internal const val LAST_SYNC_PREF = "last_sync_timestamp"
-        internal const val LAST_SYNC_ATTEMPT_PREF = "last_sync_attempt_timestamp"
-
         /** When it was last seen playing, so a restart can tell a killed listen from an old one. */
         internal const val LAST_PLAYING_AT_PREF = "last_playing_at"
-
-        internal const val SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000L
-
-        /**
-         * How long to leave a failed sync before trying again. A car's connection flaps all
-         * drive, and each flap used to start another full sync — while music played — that
-         * failed like the one before it.
-         */
-        internal const val SYNC_RETRY_BACKOFF_MS = 30 * 60 * 1000L
-
-        /** A validated network can still be settling; the first requests on it used to time out. */
-        internal const val SYNC_SETTLE_DELAY_MS = 10_000L
 
         /** How recently it must have been playing for a restart to put the queue back. */
         internal const val RESTORE_AFTER_EXIT_WINDOW_MS = 5 * 60 * 1000L
@@ -162,12 +145,6 @@ class DashTuneMusicService : MediaLibraryService() {
         /** A clock that went backwards (a car's RTC) counts as long ago, not as recent. */
         private fun within(now: Long, then: Long, windowMs: Long): Boolean =
             then > 0 && now - then in 0..windowMs
-
-        internal fun syncDecision(now: Long, lastSuccess: Long, lastAttempt: Long): SyncDecision = when {
-            within(now, lastSuccess, SYNC_INTERVAL_MS) -> SyncDecision.RAN_RECENTLY
-            within(now, lastAttempt, SYNC_RETRY_BACKOFF_MS) -> SyncDecision.FAILED_RECENTLY
-            else -> SyncDecision.DUE
-        }
 
         /**
          * Whether a fresh process should put the saved queue back on the player (paused): only
@@ -218,8 +195,6 @@ class DashTuneMusicService : MediaLibraryService() {
         }
     }
 
-    internal enum class SyncDecision { DUE, RAN_RECENTLY, FAILED_RECENTLY }
-
     @Inject
     lateinit var jellyfin: Jellyfin
 
@@ -245,6 +220,7 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var playerListener: Player.Listener
     private lateinit var focusRecovery: Runnable
     private lateinit var networkErrorRetry: Runnable
+    private lateinit var audioTrackRetry: Runnable
     private var networkErrorRetries = 0
     private var audioTrackInitRetries = 0
     private var consecutiveErrorSkips = 0
@@ -253,9 +229,7 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var connectivityManager: ConnectivityManager
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
-    /** The network a sync was last considered for, so its capability updates don't re-trigger it. */
-    private var syncNetwork: Network? = null
-    private var syncJob: Job? = null
+    private lateinit var networkSync: NetworkSyncScheduler
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -374,11 +348,13 @@ class DashTuneMusicService : MediaLibraryService() {
                     audioTrackInitRetries++
                     Log.w(LOG_TAG, "Audio output could not be opened; retrying current item")
                     FirebaseUtils.safeLog("AudioTrack init failed; retrying current item")
-                    // Same runnable as a network retry: prepare() at the failed item/position.
-                    handler.removeCallbacks(networkErrorRetry)
-                    handler.postDelayed(networkErrorRetry, AUDIO_TRACK_INIT_RETRY_DELAY_MS)
+                    handler.removeCallbacks(audioTrackRetry)
+                    handler.postDelayed(audioTrackRetry, AUDIO_TRACK_INIT_RETRY_DELAY_MS)
                     return
                 }
+                // Each item gets its own retry: when this one is skipped, the next starts fresh.
+                // consecutiveErrorSkips still bounds a queue in which nothing can play.
+                audioTrackInitRetries = 0
 
                 if (isTransientNetworkError(error.errorCode) &&
                     networkErrorRetries < MAX_NETWORK_ERROR_RETRIES
@@ -549,6 +525,15 @@ class DashTuneMusicService : MediaLibraryService() {
             }
         }
 
+        audioTrackRetry = Runnable {
+            val p = mediaLibrarySession.player
+            // prepare() clears the error and reopens the audio output at the failed position.
+            if (p.playbackState == Player.STATE_IDLE && p.playerError != null) {
+                Log.i(LOG_TAG, "Retrying playback after the audio output failed to open")
+                p.prepare()
+            }
+        }
+
         callback = DashTuneSessionCallback(this, accountManager, jellyfinApi, mediaCacheDao)
 
         mediaLibrarySession = MediaLibrarySession.Builder(this, player, callback)
@@ -566,6 +551,25 @@ class DashTuneMusicService : MediaLibraryService() {
             lastExitHandled = true
             restoreQueueAfterUnexpectedExit(ExitReasonLogger.readAndLog(this))
         }
+
+        networkSync = NetworkSyncScheduler(
+            scope = serviceScope,
+            prefs = PreferenceManager.getDefaultSharedPreferences(this),
+            isSignedIn = { accountManager.isAuthenticated },
+            isLibraryReady = { callback.isLibraryReady },
+            sync = { callback.sync() },
+            onSynced = {
+                mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
+                // A successful sync proves the server is reachable again.
+                callback.invalidateHome()
+                Toast.makeText(this, R.string.library_synced, Toast.LENGTH_SHORT).show()
+            },
+            log = { message ->
+                // Crashlytics is off in debug builds, so logcat too.
+                Log.i(LOG_TAG, message)
+                FirebaseUtils.safeLog(message)
+            },
+        )
 
         connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val networkRequest = NetworkRequest.Builder()
@@ -587,79 +591,22 @@ class DashTuneMusicService : MediaLibraryService() {
                 // Home may have been built while the server was unreachable. This callback
                 // runs on a ConnectivityManager thread; the session must be told on main.
                 handler.post { if (::callback.isInitialized) callback.invalidateHome() }
+                handler.post { networkSync.onAvailable(network) }
             }
 
-            // Sync waits for a validated network. Started from onAvailable it ran while the
-            // link was still coming up, and every request of it timed out — every drive.
+            // Sync waits for a validated network; see NetworkSyncScheduler.
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
                 if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                    handler.post { maybeSyncOn(network) }
+                    handler.post { networkSync.onValidated(network) }
                 }
             }
 
             override fun onLost(network: Network) {
-                handler.post {
-                    if (network == syncNetwork) {
-                        syncNetwork = null
-                        syncJob?.cancel()
-                    }
-                }
+                handler.post { networkSync.onLost(network) }
             }
         }
 
         connectivityManager.registerNetworkCallback(networkRequest, networkCallback!!)
-    }
-
-    /** Logs [message] to logcat as well: Crashlytics is off in debug builds. */
-    private fun breadcrumb(message: String) {
-        Log.i(LOG_TAG, message)
-        FirebaseUtils.safeLog(message)
-    }
-
-    /** Runs on main. Starts at most one sync per validated network, after it has settled. */
-    private fun maybeSyncOn(network: Network) {
-        if (network == syncNetwork || syncJob?.isActive == true) return
-        if (!accountManager.isAuthenticated) return
-        syncNetwork = network
-
-        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
-        val decision = syncDecision(
-            System.currentTimeMillis(),
-            prefs.getLong(LAST_SYNC_PREF, 0L),
-            prefs.getLong(LAST_SYNC_ATTEMPT_PREF, 0L)
-        )
-        when (decision) {
-            SyncDecision.RAN_RECENTLY -> {
-                breadcrumb("Network validated: sync skipped (ran recently)")
-                return
-            }
-            SyncDecision.FAILED_RECENTLY -> {
-                breadcrumb("Network validated: sync skipped (failed recently)")
-                return
-            }
-            SyncDecision.DUE -> breadcrumb("Network validated: sync triggered")
-        }
-
-        syncJob = serviceScope.launch {
-            delay(SYNC_SETTLE_DELAY_MS)
-            if (!callback.isLibraryReady) {
-                breadcrumb("Sync skipped: library not initialised yet")
-                return@launch
-            }
-            prefs.edit { putLong(LAST_SYNC_ATTEMPT_PREF, System.currentTimeMillis()) }
-            val success = callback.sync()
-            if (success) {
-                prefs.edit { putLong(LAST_SYNC_PREF, System.currentTimeMillis()) }
-                mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
-                // A successful sync proves the server is reachable again.
-                callback.invalidateHome()
-                Toast.makeText(
-                    this@DashTuneMusicService,
-                    R.string.library_synced,
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
     }
 
     /**
@@ -752,6 +699,7 @@ class DashTuneMusicService : MediaLibraryService() {
         handler.removeCallbacks(audiobookPositionReporter)
         handler.removeCallbacks(focusRecovery)
         handler.removeCallbacks(networkErrorRetry)
+        handler.removeCallbacks(audioTrackRetry)
 
         try {
             downloadManager.removeListener(downloadListener)
@@ -767,7 +715,7 @@ class DashTuneMusicService : MediaLibraryService() {
         }
 
         networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
-        syncJob?.cancel()
+        if (::networkSync.isInitialized) networkSync.release()
         PreferenceManager.getDefaultSharedPreferences(this)
             .unregisterOnSharedPreferenceChangeListener(prefsListener)
         serviceScope.cancel()

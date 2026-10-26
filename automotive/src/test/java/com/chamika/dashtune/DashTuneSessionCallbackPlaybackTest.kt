@@ -27,6 +27,7 @@ import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RESUME_QUEUE
+import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.google.common.util.concurrent.ListenableFuture
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -214,35 +215,44 @@ class DashTuneSessionCallbackPlaybackTest {
 
     @Test
     fun `a rejected token turns a browse into a sign-in prompt`() {
-        val (rejecting, accounts) = callbackWhoseServerAnswers401(meAlso401 = true)
-        val library = mockk<MediaLibraryService.MediaLibrarySession>(relaxed = true)
+        val server = serverAnswering401(meAlso401 = true)
 
         // Not cached, so the tree asks the server — and the cache fallback swallows the 401.
-        val result = awaitOnMain(
-            rejecting.onGetChildren(library, mockk(relaxed = true), UUID.randomUUID().toString(), 0, 50, null)
-        )
+        awaitOnMain(server.browse())
+        // The token is confirmed dead in the background (twice, a few seconds apart).
+        awaitUntil { !server.accounts.isAuthenticated }
 
-        assertEquals(SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, result.resultCode)
-        verify(exactly = 1) { accounts.invalidateToken() }
+        verify { server.library.notifyChildrenChanged(ROOT_ID, 4, null) }
+        assertEquals(SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, awaitOnMain(server.browse()).resultCode)
+        coVerify(exactly = DashTuneSessionCallback.TOKEN_CONFIRMATIONS) { server.userApi.getCurrentUser() }
     }
 
     @Test
-    fun `a 401 the server does not repeat keeps the token`() {
-        val (rejecting, accounts) = callbackWhoseServerAnswers401(meAlso401 = false)
-        val library = mockk<MediaLibraryService.MediaLibrarySession>(relaxed = true)
+    fun `a 401 the server does not repeat keeps the token, and is not re-checked straight away`() {
+        val server = serverAnswering401(meAlso401 = false)
 
-        val result = awaitOnMain(
-            rejecting.onGetChildren(library, mockk(relaxed = true), UUID.randomUUID().toString(), 0, 50, null)
-        )
+        awaitOnMain(server.browse())
+        awaitUntil { server.meCalls > 0 }
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(500))
+        val again = awaitOnMain(server.browse())
 
-        assertTrue(result.resultCode != SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED)
-        verify(exactly = 0) { accounts.invalidateToken() }
+        assertTrue(again.resultCode != SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED)
+        verify(exactly = 0) { server.accounts.invalidateToken() }
+        assertEquals(1, server.meCalls)
+    }
+
+    private class Rejecting(
+        val callback: DashTuneSessionCallback,
+        val accounts: JellyfinAccountManager,
+        val userApi: UserApi,
+        val library: MediaLibraryService.MediaLibrarySession,
+    ) {
+        var meCalls = 0
+        fun browse() = callback.onGetChildren(library, mockk(relaxed = true), UUID.randomUUID().toString(), 0, 50, null)
     }
 
     /** Item lookups get 401; "who am I" gets 401 too only when [meAlso401]. */
-    private fun callbackWhoseServerAnswers401(
-        meAlso401: Boolean
-    ): Pair<DashTuneSessionCallback, JellyfinAccountManager> {
+    private fun serverAnswering401(meAlso401: Boolean): Rejecting {
         var token: String? = "revoked"
         val accounts = mockk<JellyfinAccountManager>(relaxed = true)
         every { accounts.isAuthenticated } answers { token != null }
@@ -252,16 +262,28 @@ class DashTuneSessionCallbackPlaybackTest {
         coEvery { userLibraryApi.getItem(any(), any()) } throws InvalidStatusException(401)
         every { api.userLibraryApi } returns userLibraryApi
         val userApi = mockk<UserApi>()
-        if (meAlso401) {
-            coEvery { userApi.getCurrentUser() } throws InvalidStatusException(401)
-        } else {
-            coEvery { userApi.getCurrentUser() } returns Response(mockk<UserDto>(relaxed = true), 200, emptyMap())
-        }
         every { api.userApi } returns userApi
-        val rejecting = DashTuneSessionCallback(service(), accounts, api, dao)
-        rejecting.onGetLibraryRoot(mockk(relaxed = true), mockk(relaxed = true), null)
+        val library = mockk<MediaLibraryService.MediaLibrarySession>(relaxed = true)
+        val rejecting = Rejecting(DashTuneSessionCallback(service(), accounts, api, dao), accounts, userApi, library)
+        coEvery { userApi.getCurrentUser() } answers {
+            rejecting.meCalls++
+            if (meAlso401) throw InvalidStatusException(401)
+            Response(mockk<UserDto>(relaxed = true), 200, emptyMap())
+        }
+        rejecting.callback.onGetLibraryRoot(library, mockk(relaxed = true), null)
         shadowOf(Looper.getMainLooper()).idle()
-        return rejecting to accounts
+        return rejecting
+    }
+
+    /** Idles the main looper until [condition] holds; background work runs on real threads. */
+    private fun awaitUntil(timeoutMs: Long = 15_000, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!condition()) {
+            if (System.currentTimeMillis() > deadline) throw AssertionError("condition not met in ${timeoutMs}ms")
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
+            Thread.sleep(20)
+        }
+        shadowOf(Looper.getMainLooper()).idle()
     }
 
     // --- Tapping something that cannot be resolved ---

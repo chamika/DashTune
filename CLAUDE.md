@@ -80,6 +80,7 @@ automotive/src/main/java/com/chamika/dashtune/
 ├── FocusDenialRetry.kt             # Re-asks when audio focus is refused at play()
 ├── ExitReasonLogger.kt             # Records why the previous process ended (API 30+)
 ├── ApiErrors.kt                    # Classifies Jellyfin failures (401, unreachable)
+├── NetworkSyncScheduler.kt         # When a connectivity change starts a library sync
 ├── auth/
 │   ├── Authenticator.kt            # Android AccountAuthenticator
 │   ├── AuthenticatorService.kt     # Authenticator bound service
@@ -134,8 +135,9 @@ automotive/src/main/java/com/chamika/dashtune/
 - Cache size configurable: 100MB - 2GB (default 200MB)
 - On track change, prefetches next 5 tracks via `DownloadManager`
 - Playback position saved every 1s, restored on playback resumption
-- Room (`MediaRepository`) caches browse results. `sync()` runs once per *validated* network
-  (`onCapabilitiesChanged` with `NET_CAPABILITY_VALIDATED`, then a 10s settle), when the last
+- Room (`MediaRepository`) caches browse results. `NetworkSyncScheduler` runs `sync()` once per
+  *validated* network (`NET_CAPABILITY_VALIDATED`, then a 10s settle; a network still unvalidated
+  after 60s, e.g. a LAN-only travel router, gets a try anyway), when the last
   success is over 6h old and the last attempt over 30 min old. Started from `onAvailable`, every
   car sync failed at the 7s `requestTimeout` (Oct 2026), and since a failure never advanced the
   timestamp, every mid-drive network flap started another full sync. Waiting for validation is
@@ -155,9 +157,12 @@ automotive/src/main/java/com/chamika/dashtune/
   `SuspendToFutureAdapter.launchFuture`) reads the socket on main: `NetworkOnMainThreadException`
   on a large body, or a blocked main thread. `retryOnFailure`, `HomeSections.section` and
   `MediaRepository.sync` switch to IO themselves; direct `jellyfinApi` calls need `withContext(IO)`.
-- A 401 means the token is dead. The tree reports it (`onUnauthorized`, since browse and Home
-  swallow fetch failures), the callback drops the token, and browsing then returns
-  `ERROR_SESSION_AUTHENTICATION_EXPIRED` with the sign-in action. Unreachable-server failures
+- A 401 may mean the token is dead. The tree reports it (`onUnauthorized`, since browse and Home
+  swallow fetch failures); the callback then checks `/Users/Me` in the background, twice 3s
+  apart, and only if both are refused drops the token and notifies the root so the head unit
+  re-browses into `ERROR_SESSION_AUTHENTICATION_EXPIRED` with the sign-in action. A check the
+  server passes suppresses re-checks for 30s. `storeAccount` removes any other account, since
+  every getter reads the first and a token-less one left by a 401 would shadow a new sign-in. Unreachable-server failures
   (`ApiErrors.isOffline`) are breadcrumbs, not Crashlytics issues (`safeRecordApiException`).
 
 ### Home Tab
@@ -218,8 +223,9 @@ automotive/src/main/java/com/chamika/dashtune/
 - After a process death mid-listen (no crash, no `onDestroy`; seen in the car after a network
   flap), the service logs the `ApplicationExitInfo` reason (`last_exit_reason` key) and, if the
   exit was not intentional and it was playing within 5 min (`last_playing_at`), puts the saved
-  queue back **paused** (`restoreSavedQueuePaused`). One press of Play resumes.
-- An `AUDIO_TRACK_INIT_FAILED` error gets one in-place retry after 2s before skipping.
+  queue back **paused** (`restoreSavedQueuePaused`). One press of Play resumes. The tree is built
+  with the head unit's last art-size hint (`art_size_hint` pref), since this runs before it browses.
+- An `AUDIO_TRACK_INIT_FAILED` error gets one in-place retry per item after 2s before skipping.
 
 ## Key Jellyfin APIs Used
 - `userLibraryApi` - Browse library, latest items, favourites, get item userData

@@ -67,7 +67,15 @@ class FailureModeE2eTest {
         val elapsed = System.currentTimeMillis() - startedAt
 
         assertTrue("401 should fail fast, took ${elapsed}ms", elapsed < 8_000)
-        assertEquals(SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, code)
+        assertTrue("the first browse must not report sign-in yet ($code)", code != SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED)
+
+        // The 401 is confirmed in the background, twice a few seconds apart, before the
+        // token is dropped and browsing offers sign-in.
+        val deadline = System.currentTimeMillis() + 15_000
+        while (browser.childrenResultCode(LATEST_ALBUMS) != SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED) {
+            assertTrue("browse never asked to sign in", System.currentTimeMillis() < deadline)
+            Thread.sleep(500)
+        }
 
         // The token is gone, so the head unit keeps offering sign-in rather than retrying a
         // token the server will never accept again.

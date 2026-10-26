@@ -245,49 +245,7 @@ class DashTuneMusicServiceTest {
         assertFalse(DashTuneMusicService.isAudioTrackInitError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED))
     }
 
-    // --- Network sync scheduling ---
-
-    private val hour = 60 * 60 * 1000L
     private val now = 1_800_000_000_000L
-
-    @Test
-    fun `a library never synced is due`() {
-        assertEquals(DashTuneMusicService.SyncDecision.DUE, DashTuneMusicService.syncDecision(now, 0L, 0L))
-    }
-
-    @Test
-    fun `a sync that succeeded within six hours is not repeated`() {
-        assertEquals(
-            DashTuneMusicService.SyncDecision.RAN_RECENTLY,
-            DashTuneMusicService.syncDecision(now, now - 5 * hour, now - 5 * hour)
-        )
-    }
-
-    @Test
-    fun `a failed sync is not retried on every network flap`() {
-        // The car's connection drops and returns all drive; each return used to start a sync.
-        assertEquals(
-            DashTuneMusicService.SyncDecision.FAILED_RECENTLY,
-            DashTuneMusicService.syncDecision(now, now - 30 * hour, now - 10 * 60 * 1000L)
-        )
-    }
-
-    @Test
-    fun `a failed sync is retried once the backoff has passed`() {
-        assertEquals(
-            DashTuneMusicService.SyncDecision.DUE,
-            DashTuneMusicService.syncDecision(now, now - 30 * hour, now - DashTuneMusicService.SYNC_RETRY_BACKOFF_MS - 1)
-        )
-    }
-
-    @Test
-    fun `timestamps from the future count as long ago, not as recent`() {
-        // A car's clock can jump backwards; that must not suppress syncing for hours.
-        assertEquals(
-            DashTuneMusicService.SyncDecision.DUE,
-            DashTuneMusicService.syncDecision(now, now + hour, now + hour)
-        )
-    }
 
     // --- Restoring the queue after the process was killed ---
 

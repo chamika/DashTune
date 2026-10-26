@@ -3,6 +3,7 @@ package com.chamika.dashtune
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.concurrent.futures.SuspendToFutureAdapter
@@ -40,11 +41,14 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
@@ -84,10 +88,30 @@ class DashTuneSessionCallback(
         // callback's future — a future that never completes wedges the controller's
         // command queue permanently (issue #31), so every future must complete.
         private const val COMMAND_TIMEOUT_MS = 10_000L
+
+        /** The head unit's last artwork size hint, for a tree built before it browses. */
+        internal const val ART_SIZE_HINT_PREF = "art_size_hint"
+        private const val DEFAULT_ART_SIZE = 1024
+
+        /** A 401 must repeat this many times, this far apart, before the token is dropped. */
+        internal const val TOKEN_CONFIRMATIONS = 2
+        internal const val TOKEN_CONFIRM_GAP_MS = 3_000L
+
+        /** After the server accepts the token on a check, further 401s go unchecked this long. */
+        internal const val TOKEN_OK_TTL_MS = 30_000L
     }
 
     private lateinit var repository: MediaRepository
-    private val tokenCheck = Mutex()
+    private val authScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val tokenCheckLock = Any()
+    private var tokenCheck: Job? = null
+
+    @Volatile
+    private var tokenOkUntil = 0L
+
+    /** The session the head unit browses, to tell it to look again once the token is dropped. */
+    @Volatile
+    private var librarySession: MediaLibraryService.MediaLibrarySession? = null
     private lateinit var resolver: MediaItemResolver
     private val initLock = Any()
 
@@ -148,7 +172,11 @@ class DashTuneSessionCallback(
     private fun ensureTreeInitialized(artSizeHint: Int? = null) {
         synchronized(initLock) {
             if (!::repository.isInitialized) {
-                val artSize = artSizeHint ?: 1024
+                // A restore after a kill builds the tree before the head unit browses, so without
+                // the hint it remembered from last time the art size would be the default.
+                val artSize = artSizeHint
+                    ?: PreferenceManager.getDefaultSharedPreferences(service)
+                        .getInt(ART_SIZE_HINT_PREF, DEFAULT_ART_SIZE)
                 Log.d(LOG_TAG, "Initializing media tree with art size: $artSize")
 
                 val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
@@ -166,7 +194,12 @@ class DashTuneSessionCallback(
     ): ListenableFuture<LibraryResult<MediaItem>> {
         Log.i(LOG_TAG, "onGetRoot")
 
-        val artSize = params?.extras?.getInt(EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS)
+        librarySession = session
+        // getInt answers 0 when the head unit sent no hint; that is no size at all.
+        val artSize = params?.extras?.getInt(EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS)?.takeIf { it > 0 }
+        if (artSize != null) {
+            PreferenceManager.getDefaultSharedPreferences(service).edit { putInt(ART_SIZE_HINT_PREF, artSize) }
+        }
         ensureTreeInitialized(artSize)
 
         // Always return a valid root MediaItem. Returning LibraryResult.ofError here
@@ -297,35 +330,55 @@ class DashTuneSessionCallback(
     )
 
     /**
-     * A request got HTTP 401. If the server also refuses the token on a plain "who am I"
-     * call, the token is dead (revoked, or the user removed) and is dropped: from here on the
-     * account reads as signed out and every browse offers sign-in, instead of each call
-     * failing on its own with "library unavailable". A 401 that does not repeat — a proxy in
-     * front of the server having a moment, say — must not sign a working account out in
-     * the car, so then the token stays.
+     * A request got HTTP 401. If the server keeps refusing the token on a plain "who am I" call
+     * — [TOKEN_CONFIRMATIONS] times, [TOKEN_CONFIRM_GAP_MS] apart — the token is dead (revoked,
+     * or the user removed) and is dropped: from then on the account reads as signed out and
+     * every browse offers sign-in, instead of each call failing with "library unavailable".
+     * A 401 that does not repeat, such as a proxy in front of the server restarting, must not
+     * sign a working account out in the car.
+     *
+     * The check runs in the background, one at a time, so the browse that hit the 401 is not
+     * held up; the head unit is told to look again once the token is gone.
      */
-    private suspend fun onTokenRejected() = tokenCheck.withLock {
-        if (!accountManager.isAuthenticated) return@withLock
-        val confirmed = try {
-            withContext(Dispatchers.IO) { jellyfinApi.userApi.getCurrentUser() }
-            false
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            ApiErrors.isUnauthorized(e)
+    private fun onTokenRejected() {
+        if (!accountManager.isAuthenticated) return
+        if (SystemClock.elapsedRealtime() < tokenOkUntil) return
+        synchronized(tokenCheckLock) {
+            if (tokenCheck?.isActive == true) return
+            tokenCheck = authScope.launch { confirmTokenRejected() }
         }
-        if (!confirmed) {
-            Log.w(LOG_TAG, "A request got 401 but the token still works; keeping it")
-            FirebaseUtils.safeLog("401 not confirmed by /Users/Me; keeping the token")
-            return@withLock
+    }
+
+    private suspend fun confirmTokenRejected() {
+        repeat(TOKEN_CONFIRMATIONS) { attempt ->
+            if (attempt > 0) delay(TOKEN_CONFIRM_GAP_MS)
+            if (!currentUserRejected()) {
+                tokenOkUntil = SystemClock.elapsedRealtime() + TOKEN_OK_TTL_MS
+                Log.w(LOG_TAG, "A request got 401 but the token still works; keeping it")
+                FirebaseUtils.safeLog("401 not confirmed by /Users/Me; keeping the token")
+                return
+            }
         }
         Log.w(LOG_TAG, "Server rejected the access token; sign-in required")
         FirebaseUtils.safeLog("Server rejected the access token (401); sign-in required")
         accountManager.invalidateToken()
+        withContext(Dispatchers.Main) {
+            librarySession?.notifyChildrenChanged(ROOT_ID, 4, null)
+            homeSession?.notifyChildrenChanged(HOME, homeChildCount, null)
+        }
+    }
+
+    private suspend fun currentUserRejected(): Boolean = try {
+        jellyfinApi.userApi.getCurrentUser()
+        false
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        ApiErrors.isUnauthorized(e)
     }
 
     /** True when [e], or an earlier 401, means the user has to sign in again. */
-    private suspend fun tokenRejected(e: Exception): Boolean {
+    private fun tokenRejected(e: Exception): Boolean {
         if (ApiErrors.isUnauthorized(e)) onTokenRejected()
         return !accountManager.isAuthenticated
     }

@@ -83,7 +83,7 @@ class JellyfinMediaTree(
      * failures — browse falls back to the cache, Home drops the section — so the 401 is
      * reported here, where every request passes, rather than left to surface on its own.
      */
-    private val onUnauthorized: suspend () -> Unit = {}
+    private val onUnauthorized: () -> Unit = {}
 ) {
 
     private val mediaItems: Cache<String, MediaItem> = CacheBuilder.newBuilder()
