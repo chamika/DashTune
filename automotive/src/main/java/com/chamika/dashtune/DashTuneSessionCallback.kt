@@ -43,10 +43,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.itemsApi
+import org.jellyfin.sdk.api.client.extensions.userApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.serializer.toUUID
@@ -84,6 +87,7 @@ class DashTuneSessionCallback(
     }
 
     private lateinit var repository: MediaRepository
+    private val tokenCheck = Mutex()
     private lateinit var resolver: MediaItemResolver
     private val initLock = Any()
 
@@ -148,7 +152,7 @@ class DashTuneSessionCallback(
                 Log.d(LOG_TAG, "Initializing media tree with art size: $artSize")
 
                 val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
-                val tree = JellyfinMediaTree(service, jellyfinApi, itemFactory)
+                val tree = JellyfinMediaTree(service, jellyfinApi, itemFactory, ::onTokenRejected)
                 repository = MediaRepository(mediaCacheDao, tree, itemFactory)
                 resolver = MediaItemResolver(repository)
             }
@@ -206,16 +210,7 @@ class DashTuneSessionCallback(
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
         Log.i(LOG_TAG, "onGetChildren $parentId page=$page pageSize=$pageSize")
         if (!accountManager.isAuthenticated) {
-            return Futures.immediateFuture(
-                LibraryResult.ofError(
-                    SessionError(
-                        SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED,
-                        service.getString(R.string.sign_in_to_your_jellyfin_server)
-                    ),
-                    MediaLibraryService.LibraryParams.Builder()
-                        .setExtras(authenticationExtras()).build()
-                )
-            )
+            return Futures.immediateFuture(signInRequired())
         }
 
         ensureTreeInitialized()
@@ -225,6 +220,9 @@ class DashTuneSessionCallback(
                 val children = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
                     repository.getChildren(parentId)
                 } ?: throw java.util.concurrent.TimeoutException("Browse timed out after ${BROWSE_TIMEOUT_MS}ms")
+                // A 401 is swallowed by the cache fallback and by Home's sections; the tree
+                // reported it, so offer sign-in rather than an empty or local-only list.
+                if (!accountManager.isAuthenticated) return@launchFuture signInRequired()
                 if (parentId == HOME) {
                     // Remembered so a later invalidation can notify with the right count.
                     homeSession = session
@@ -232,10 +230,11 @@ class DashTuneSessionCallback(
                 }
                 LibraryResult.ofItemList(children.page(page, pageSize), params)
             } catch (e: Exception) {
+                if (tokenRejected(e)) return@launchFuture signInRequired()
                 Log.e(LOG_TAG, "Failed to get children for $parentId", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_children")
                 FirebaseUtils.safeSetCustomKey("parent_id", parentId)
-                FirebaseUtils.safeRecordException(e)
+                FirebaseUtils.safeRecordApiException(e)
                 LibraryResult.ofError(
                     SessionError(
                         SessionError.ERROR_UNKNOWN,
@@ -287,6 +286,50 @@ class DashTuneSessionCallback(
         }
     }
 
+    /** The error that makes the head unit show its sign-in button. */
+    private fun <V : Any> signInRequired(): LibraryResult<V> = LibraryResult.ofError(
+        SessionError(
+            SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED,
+            service.getString(R.string.sign_in_to_your_jellyfin_server)
+        ),
+        MediaLibraryService.LibraryParams.Builder()
+            .setExtras(authenticationExtras()).build()
+    )
+
+    /**
+     * A request got HTTP 401. If the server also refuses the token on a plain "who am I"
+     * call, the token is dead (revoked, or the user removed) and is dropped: from here on the
+     * account reads as signed out and every browse offers sign-in, instead of each call
+     * failing on its own with "library unavailable". A 401 that does not repeat — a proxy in
+     * front of the server having a moment, say — must not sign a working account out in
+     * the car, so then the token stays.
+     */
+    private suspend fun onTokenRejected() = tokenCheck.withLock {
+        if (!accountManager.isAuthenticated) return@withLock
+        val confirmed = try {
+            withContext(Dispatchers.IO) { jellyfinApi.userApi.getCurrentUser() }
+            false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ApiErrors.isUnauthorized(e)
+        }
+        if (!confirmed) {
+            Log.w(LOG_TAG, "A request got 401 but the token still works; keeping it")
+            FirebaseUtils.safeLog("401 not confirmed by /Users/Me; keeping the token")
+            return@withLock
+        }
+        Log.w(LOG_TAG, "Server rejected the access token; sign-in required")
+        FirebaseUtils.safeLog("Server rejected the access token (401); sign-in required")
+        accountManager.invalidateToken()
+    }
+
+    /** True when [e], or an earlier 401, means the user has to sign in again. */
+    private suspend fun tokenRejected(e: Exception): Boolean {
+        if (ApiErrors.isUnauthorized(e)) onTokenRejected()
+        return !accountManager.isAuthenticated
+    }
+
     private fun retryExtras(): Bundle {
         return Bundle().also {
             it.putString(
@@ -325,9 +368,10 @@ class DashTuneSessionCallback(
                 } ?: throw TimeoutException("getItem timed out after ${BROWSE_TIMEOUT_MS}ms")
                 LibraryResult.ofItem(item, null)
             } catch (e: Exception) {
+                if (tokenRejected(e)) return@launchFuture signInRequired()
                 Log.e(LOG_TAG, "Failed to get item $mediaId", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_item")
-                FirebaseUtils.safeRecordException(e)
+                FirebaseUtils.safeRecordApiException(e)
                 LibraryResult.ofError(
                     SessionError(
                         SessionError.ERROR_UNKNOWN,
@@ -355,9 +399,10 @@ class DashTuneSessionCallback(
                     "resolveMediaItems timed out after ${COMMAND_TIMEOUT_MS}ms"
                 )
             } catch (e: Exception) {
+                tokenRejected(e)
                 Log.e(LOG_TAG, "Failed to add media items", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "add_media_items")
-                FirebaseUtils.safeRecordException(e)
+                FirebaseUtils.safeRecordApiException(e)
                 // Rethrow to complete the future exceptionally: Media3 drops this one
                 // command and keeps processing the queue, keeping the session usable.
                 throw e
@@ -384,12 +429,21 @@ class DashTuneSessionCallback(
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to set media items", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "set_media_items")
-                FirebaseUtils.safeRecordException(e)
                 // Media3 drops a failed play-from-id from the head unit without a word, which
                 // left a tap looking ignored. Tell the user; the current queue is untouched.
-                mediaSession.sendError(
-                    SessionError(SessionError.ERROR_IO, service.getString(R.string.media_unavailable))
-                )
+                if (tokenRejected(e)) {
+                    mediaSession.sendError(
+                        SessionError(
+                            SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED,
+                            service.getString(R.string.sign_in_to_your_jellyfin_server)
+                        )
+                    )
+                } else {
+                    FirebaseUtils.safeRecordApiException(e)
+                    mediaSession.sendError(
+                        SessionError(SessionError.ERROR_IO, service.getString(R.string.media_unavailable))
+                    )
+                }
                 // Rethrow to complete the future exceptionally: the current queue keeps
                 // playing and the session stays responsive to later commands.
                 throw e
@@ -629,10 +683,11 @@ class DashTuneSessionCallback(
                 session.notifySearchResultChanged(browser, query, results, params)
                 LibraryResult.ofVoid(params)
             } catch (e: Exception) {
+                if (tokenRejected(e)) return@launchFuture signInRequired()
                 Log.e(LOG_TAG, "Failed to search for '$query'", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "search")
                 FirebaseUtils.safeSetCustomKey("search_query", query)
-                FirebaseUtils.safeRecordException(e)
+                FirebaseUtils.safeRecordApiException(e)
                 LibraryResult.ofError(
                     SessionError(
                         SessionError.ERROR_UNKNOWN,
@@ -660,10 +715,11 @@ class DashTuneSessionCallback(
                 } ?: throw java.util.concurrent.TimeoutException("Search timed out after ${BROWSE_TIMEOUT_MS}ms")
                 LibraryResult.ofItemList(results.page(page, pageSize), params)
             } catch (e: Exception) {
+                if (tokenRejected(e)) return@launchFuture signInRequired()
                 Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_search_result")
                 FirebaseUtils.safeSetCustomKey("search_query", query)
-                FirebaseUtils.safeRecordException(e)
+                FirebaseUtils.safeRecordApiException(e)
                 LibraryResult.ofError(
                     SessionError(
                         SessionError.ERROR_UNKNOWN,
@@ -697,6 +753,23 @@ class DashTuneSessionCallback(
             keepRestoredQueue(saved)
             saved
         }
+    }
+
+    /**
+     * Puts the saved queue on the player, paused at the saved position, for a process that
+     * was killed mid-listen. Leaves the player alone if anything was queued meanwhile — a
+     * head unit's own resume, or the user picking something. True when it restored.
+     */
+    suspend fun restoreSavedQueuePaused(session: MediaSession): Boolean {
+        ensureTreeInitialized()
+        val saved = loadSavedQueue()
+        val player = session.player
+        if (saved.mediaItems.isEmpty() || player.mediaItemCount != 0) return false
+        keepRestoredQueue(saved)
+        player.setMediaItems(saved.mediaItems, saved.startIndex, saved.startPositionMs)
+        player.playWhenReady = false
+        player.prepare()
+        return true
     }
 
     /**
@@ -795,15 +868,24 @@ class DashTuneSessionCallback(
         }
     }
 
+    /** False until a browser or command has created the media tree. */
+    val isLibraryReady: Boolean
+        get() = synchronized(initLock) { ::repository.isInitialized }
+
     suspend fun sync(): Boolean {
-        if (!::repository.isInitialized) return false
+        if (!::repository.isInitialized) {
+            FirebaseUtils.safeLog("Sync skipped: library not initialised yet")
+            return false
+        }
         FirebaseUtils.safeLog("Sync started")
         val result = repository.sync()
         FirebaseUtils.safeLog(if (result) "Sync completed" else "Sync failed")
         return result
     }
 
-    private suspend fun applyRating(currentMediaItem: String, newRating: Rating) {
+    // Direct SDK calls below run on IO: launchFuture resumes on main, and the SDK reads the
+    // response body on whichever thread resumes it.
+    private suspend fun applyRating(currentMediaItem: String, newRating: Rating): Unit = withContext(Dispatchers.IO) {
         val id = currentMediaItem.toUUID()
 
         if (newRating == HeartRating(true)) {
@@ -818,7 +900,7 @@ class DashTuneSessionCallback(
     private suspend fun getAudiobookResumePosition(
         bookId: String,
         chapters: List<MediaItem>
-    ): Pair<Int, Long>? {
+    ): Pair<Int, Long>? = withContext(Dispatchers.IO) {
         val response = jellyfinApi.itemsApi.getItems(
             parentId = bookId.toUUID(),
             sortBy = listOf(
@@ -841,7 +923,7 @@ class DashTuneSessionCallback(
                 val chapterIndex = chapters.indexOfFirst { it.mediaId == lastInProgress.id.toString() }
                 if (chapterIndex >= 0) {
                     val positionMs = (lastInProgress.userData?.playbackPositionTicks ?: 0) / 10_000
-                    return Pair(chapterIndex, positionMs)
+                    return@withContext Pair(chapterIndex, positionMs)
                 }
             }
             // Fall through: children didn't match resolved items (e.g. folder/library items)
@@ -853,18 +935,18 @@ class DashTuneSessionCallback(
         val positionTicks = item.userData?.playbackPositionTicks ?: 0
         if (positionTicks > 0) {
             val positionMs = positionTicks / 10_000
-            return Pair(0, positionMs)
+            return@withContext Pair(0, positionMs)
         }
 
-        return null
+        null
     }
 
-    private suspend fun getChapterResumePosition(chapterId: String): Long {
+    private suspend fun getChapterResumePosition(chapterId: String): Long = withContext(Dispatchers.IO) {
         val itemResponse = jellyfinApi.userLibraryApi.getItem(chapterId.toUUID())
         val userData = itemResponse.content.userData
         Log.i(LOG_TAG, "Server userData for $chapterId: positionTicks=${userData?.playbackPositionTicks}, played=${userData?.played}, playCount=${userData?.playCount}")
         val positionTicks = userData?.playbackPositionTicks ?: 0
-        return positionTicks / 10_000
+        positionTicks / 10_000
     }
 
     private fun handleAudiobookShuffle(

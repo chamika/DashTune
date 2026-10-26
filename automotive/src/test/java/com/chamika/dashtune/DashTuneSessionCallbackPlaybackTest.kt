@@ -1,5 +1,12 @@
 package com.chamika.dashtune
 
+import org.jellyfin.sdk.model.api.UserDto
+import org.jellyfin.sdk.api.client.Response
+import org.jellyfin.sdk.api.operations.UserApi
+import org.jellyfin.sdk.api.client.extensions.userApi
+import org.junit.Assert.assertFalse
+import org.jellyfin.sdk.api.client.exception.InvalidStatusException
+import androidx.concurrent.futures.SuspendToFutureAdapter
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Looper
@@ -169,6 +176,94 @@ class DashTuneSessionCallbackPlaybackTest {
         assertFailsWithIllegalState(resume())
     }
 
+    // --- Restoring after the process was killed mid-listen ---
+
+    @Test
+    fun `after an unexpected exit the saved queue is put back paused at its position`() {
+        saveQueue(listOf(a, b, c), index = 1, positionMs = 42_000)
+        givenSavedQueueRows(a, b, c)
+
+        val restored = awaitOnMain(restorePaused())
+
+        assertTrue(restored)
+        verify {
+            player.setMediaItems(match<List<MediaItem>> { it.map { i -> i.mediaId } == listOf(a, b, c) }, 1, 42_000L)
+        }
+        verify { player.playWhenReady = false }
+        verify { player.prepare() }
+        verify(exactly = 0) { player.play() }
+    }
+
+    @Test
+    fun `a queue set while restoring after an exit is left alone`() {
+        saveQueue(listOf(a, b), index = 0)
+        givenSavedQueueRows(a, b)
+        every { player.mediaItemCount } returns 3
+
+        assertFalse(awaitOnMain(restorePaused()))
+        verify(exactly = 0) { player.setMediaItems(any<List<MediaItem>>(), any<Int>(), any<Long>()) }
+    }
+
+    @Test
+    fun `with nothing saved there is nothing to restore after an exit`() {
+        assertFalse(awaitOnMain(restorePaused()))
+        verify(exactly = 0) { player.prepare() }
+    }
+
+    // --- A server that no longer accepts the token ---
+
+    @Test
+    fun `a rejected token turns a browse into a sign-in prompt`() {
+        val (rejecting, accounts) = callbackWhoseServerAnswers401(meAlso401 = true)
+        val library = mockk<MediaLibraryService.MediaLibrarySession>(relaxed = true)
+
+        // Not cached, so the tree asks the server — and the cache fallback swallows the 401.
+        val result = awaitOnMain(
+            rejecting.onGetChildren(library, mockk(relaxed = true), UUID.randomUUID().toString(), 0, 50, null)
+        )
+
+        assertEquals(SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, result.resultCode)
+        verify(exactly = 1) { accounts.invalidateToken() }
+    }
+
+    @Test
+    fun `a 401 the server does not repeat keeps the token`() {
+        val (rejecting, accounts) = callbackWhoseServerAnswers401(meAlso401 = false)
+        val library = mockk<MediaLibraryService.MediaLibrarySession>(relaxed = true)
+
+        val result = awaitOnMain(
+            rejecting.onGetChildren(library, mockk(relaxed = true), UUID.randomUUID().toString(), 0, 50, null)
+        )
+
+        assertTrue(result.resultCode != SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED)
+        verify(exactly = 0) { accounts.invalidateToken() }
+    }
+
+    /** Item lookups get 401; "who am I" gets 401 too only when [meAlso401]. */
+    private fun callbackWhoseServerAnswers401(
+        meAlso401: Boolean
+    ): Pair<DashTuneSessionCallback, JellyfinAccountManager> {
+        var token: String? = "revoked"
+        val accounts = mockk<JellyfinAccountManager>(relaxed = true)
+        every { accounts.isAuthenticated } answers { token != null }
+        every { accounts.invalidateToken() } answers { token = null }
+        val api = mockk<ApiClient>(relaxed = true)
+        val userLibraryApi = mockk<UserLibraryApi>()
+        coEvery { userLibraryApi.getItem(any(), any()) } throws InvalidStatusException(401)
+        every { api.userLibraryApi } returns userLibraryApi
+        val userApi = mockk<UserApi>()
+        if (meAlso401) {
+            coEvery { userApi.getCurrentUser() } throws InvalidStatusException(401)
+        } else {
+            coEvery { userApi.getCurrentUser() } returns Response(mockk<UserDto>(relaxed = true), 200, emptyMap())
+        }
+        every { api.userApi } returns userApi
+        val rejecting = DashTuneSessionCallback(service(), accounts, api, dao)
+        rejecting.onGetLibraryRoot(mockk(relaxed = true), mockk(relaxed = true), null)
+        shadowOf(Looper.getMainLooper()).idle()
+        return rejecting to accounts
+    }
+
     // --- Tapping something that cannot be resolved ---
 
     @Test
@@ -291,6 +386,9 @@ class DashTuneSessionCallbackPlaybackTest {
         every { api.universalAudioApi } returns mockk<UniversalAudioApi>(relaxed = true)
         return api
     }
+
+    private fun restorePaused(): ListenableFuture<Boolean> =
+        SuspendToFutureAdapter.launchFuture { callback.restoreSavedQueuePaused(session) }
 
     private fun assertFailsWithIllegalState(future: ListenableFuture<*>) {
         try {

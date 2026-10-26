@@ -1,5 +1,6 @@
 package com.chamika.dashtune
 
+import androidx.media3.session.SessionError
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.chamika.dashtune.fake.ServerBehavior
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
@@ -59,10 +60,21 @@ class FailureModeE2eTest {
     }
 
     @Test
-    fun anExpiredTokenFailsFastAndLeavesTheSessionUsable() {
-        val elapsed = browseUnder(ServerBehavior.Unauthorized)
+    fun aRejectedTokenAsksToSignInAndRecoversAfterSigningIn() {
+        val startedAt = System.currentTimeMillis()
+        dashTune.server.behavior = ServerBehavior.Unauthorized
+        val code = browser.childrenResultCode(LATEST_ALBUMS)
+        val elapsed = System.currentTimeMillis() - startedAt
 
         assertTrue("401 should fail fast, took ${elapsed}ms", elapsed < 8_000)
+        assertEquals(SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, code)
+
+        // The token is gone, so the head unit keeps offering sign-in rather than retrying a
+        // token the server will never accept again.
+        dashTune.server.behavior = ServerBehavior.Healthy
+        assertEquals(SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, browser.childrenResultCode(LATEST_ALBUMS))
+
+        dashTune.signInAgain()
         assertSessionRecovers()
     }
 

@@ -18,6 +18,19 @@ object FirebaseUtils {
         }
     }
 
+    /**
+     * Records a failed Jellyfin call — unless it only means the server could not be reached,
+     * which is routine in a car out of coverage. That leaves a breadcrumb instead, so the
+     * Crashlytics issue list keeps the failures worth reading.
+     */
+    fun safeRecordApiException(e: Exception) {
+        if (ApiErrors.isOffline(e)) {
+            safeLog("Server unreachable (${e.javaClass.simpleName})")
+        } else {
+            safeRecordException(e)
+        }
+    }
+
     /** Logs [message] to Firebase Crashlytics, safe against GMS unavailability. */
     fun safeLog(message: String) {
         try {

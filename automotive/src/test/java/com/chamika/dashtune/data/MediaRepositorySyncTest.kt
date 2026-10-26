@@ -1,5 +1,7 @@
 package com.chamika.dashtune.data
 
+import kotlinx.coroutines.runBlocking
+import android.os.Looper
 import android.net.Uri
 import android.os.Bundle
 import androidx.media3.common.HeartRating
@@ -751,5 +753,26 @@ class MediaRepositorySyncTest {
         val result = repository.getContentParentId("track-1")
 
         assertNull(result)
+    }
+
+    // --- Threading ---
+
+    @Test
+    fun `a sync started on the main thread fetches off it`() {
+        // The service starts the network-triggered sync from its main-thread scope, and the
+        // SDK reads each response body on the thread that resumes it: on main, a large
+        // library failed with NetworkOnMainThreadException.
+        val main = Looper.getMainLooper()
+        assertEquals("Robolectric runs tests on the main looper", main, Looper.myLooper())
+        var fetchedOnMain: Boolean? = null
+        coEvery { tree.getActiveCategoryIds() } returns listOf(LATEST_ALBUMS)
+        coEvery { tree.getChildren(LATEST_ALBUMS) } answers {
+            fetchedOnMain = Looper.myLooper() == main
+            emptyList()
+        }
+
+        runBlocking { repository.sync() }
+
+        assertEquals(false, fetchedOnMain)
     }
 }

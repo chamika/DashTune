@@ -8,6 +8,7 @@ import androidx.media3.common.MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_GENRE
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_PLAYLIST
 import androidx.preference.PreferenceManager
+import com.chamika.dashtune.ApiErrors
 import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.R
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
@@ -35,7 +36,9 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_NEW
 import com.google.common.cache.Cache
 import com.google.common.cache.CacheBuilder
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.artistsApi
@@ -74,14 +77,20 @@ private const val MAX_CHILDREN_PAGES = 50
 class JellyfinMediaTree(
     private val context: Context,
     private val api: ApiClient,
-    private val itemFactory: MediaItemFactory
+    private val itemFactory: MediaItemFactory,
+    /**
+     * Told when the server refuses our token (HTTP 401). Several callers above swallow fetch
+     * failures — browse falls back to the cache, Home drops the section — so the 401 is
+     * reported here, where every request passes, rather than left to surface on its own.
+     */
+    private val onUnauthorized: suspend () -> Unit = {}
 ) {
 
     private val mediaItems: Cache<String, MediaItem> = CacheBuilder.newBuilder()
         .maximumSize(1000)
         .build()
 
-    private val homeSections = HomeSections(context, api, itemFactory)
+    private val homeSections = HomeSections(context, api, itemFactory, onUnauthorized)
 
     fun invalidateCache() {
         mediaItems.invalidateAll()
@@ -103,12 +112,16 @@ class JellyfinMediaTree(
             try {
                 // Hard cap per attempt so no tree network call can suspend forever
                 // even if a caller has no timeout guard of its own (issue #31).
-                return withTimeoutOrNull(REQUEST_HARD_TIMEOUT_MS) { block() }
-                    ?: throw TimeoutException("Request timed out after ${REQUEST_HARD_TIMEOUT_MS}ms")
+                // On IO whatever the caller's dispatcher: the SDK reads the response body on
+                // the thread that resumes it, and session callbacks resume on main.
+                return withContext(Dispatchers.IO) {
+                    withTimeoutOrNull(REQUEST_HARD_TIMEOUT_MS) { block() }
+                } ?: throw TimeoutException("Request timed out after ${REQUEST_HARD_TIMEOUT_MS}ms")
             } catch (e: CancellationException) {
                 // A caller's outer timeout cancelled us — propagate, never retry.
                 throw e
             } catch (e: Exception) {
+                if (ApiErrors.isUnauthorized(e)) onUnauthorized()
                 if (isRetryable(e)) {
                     lastException = e
                     if (attempt < maxRetries) {

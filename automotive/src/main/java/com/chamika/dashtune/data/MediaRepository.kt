@@ -367,7 +367,12 @@ class MediaRepository(
      * else keeps its last good copy: a sync at the start of a drive, while the car's
      * connection is still coming up, must never leave less offline content than it found.
      */
-    suspend fun sync(): Boolean = syncMutex.withLock {
+    suspend fun sync(): Boolean = withContext(Dispatchers.IO) { syncLocked() }
+
+    // Callers include the service's main-thread scope, and the SDK reads response bodies on
+    // whichever thread resumes it — a sync started from main failed with
+    // NetworkOnMainThreadException on large libraries.
+    private suspend fun syncLocked(): Boolean = syncMutex.withLock {
         val sectionIds = tree.getActiveCategoryIds().filterNot { it in unsyncedSections }
         val refreshed = LinkedHashMap<String, List<CachedMediaItemEntity>>()
         var complete = true
@@ -387,7 +392,7 @@ class MediaRepository(
                 complete = false
                 Log.e(LOG_TAG, "Failed to sync section $sectionId", e)
                 FirebaseUtils.safeSetCustomKey("sync_failed_section", sectionId)
-                FirebaseUtils.safeRecordException(e)
+                FirebaseUtils.safeRecordApiException(e)
             }
         }
 

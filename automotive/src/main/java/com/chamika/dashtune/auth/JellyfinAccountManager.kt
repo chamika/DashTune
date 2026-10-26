@@ -45,6 +45,14 @@ class JellyfinAccountManager(private val accountManager: AccountManager) {
         return account
     }
 
+    /**
+     * Forgets a token the server no longer accepts. The account stays, so [isAuthenticated]
+     * turns false and signing in again stores the new token on the same account.
+     */
+    fun invalidateToken() {
+        token?.let { accountManager.invalidateAuthToken(ACCOUNT_TYPE, it) }
+    }
+
     fun logout() {
         account?.let { accountManager.removeAccountExplicitly(it) }
     }

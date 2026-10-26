@@ -143,8 +143,11 @@ class AlbumArtContentProvider : ContentProvider() {
                     tmpFile.renameTo(file)
                 } else {
                     Log.w(LOG_TAG, "Failed to download $remoteUri: \n ${it.code} - ${it.body}")
-                    FirebaseUtils.safeSetCustomKey("album_art_path", remoteUri.path ?: "unknown")
-                    FirebaseUtils.safeRecordException(Exception("Album art download failed: HTTP ${it.code}"))
+                    // 404 just means the item has no artwork; the placeholder covers it.
+                    if (it.code != 404) {
+                        FirebaseUtils.safeSetCustomKey("album_art_path", remoteUri.path ?: "unknown")
+                        FirebaseUtils.safeRecordException(Exception("Album art download failed: HTTP ${it.code}"))
+                    }
                 }
             }
         } catch (e: IOException) {

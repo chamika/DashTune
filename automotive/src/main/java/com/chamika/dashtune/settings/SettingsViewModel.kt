@@ -42,6 +42,7 @@ class SettingsViewModel @Inject constructor(
         }
         PreferenceManager.getDefaultSharedPreferences(context).edit().apply {
             remove("last_sync_timestamp")
+            remove(DashTuneMusicService.LAST_SYNC_ATTEMPT_PREF)
             apply()
         }
         context.startService(Intent(context, DashTuneMusicService::class.java).apply {
@@ -66,6 +67,8 @@ class SettingsViewModel @Inject constructor(
             remove("playlistIndex")
             remove("playlistTrackPositionMs")
             remove("last_sync_timestamp")
+            remove(DashTuneMusicService.LAST_SYNC_ATTEMPT_PREF)
+            remove(DashTuneMusicService.LAST_PLAYING_AT_PREF)
             remove("repeat_mode")
             remove("shuffle_enabled")
             apply()

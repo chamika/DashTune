@@ -235,4 +235,125 @@ class DashTuneMusicServiceTest {
     fun `isAudiobookTrack returns false for null item`() {
         assertFalse(DashTuneMusicService.isAudiobookTrack(null))
     }
+
+    // --- AudioTrack init retry ---
+
+    @Test
+    fun `an audio output that could not be opened is recognised`() {
+        assertTrue(DashTuneMusicService.isAudioTrackInitError(PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED))
+        assertFalse(DashTuneMusicService.isAudioTrackInitError(PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED))
+        assertFalse(DashTuneMusicService.isAudioTrackInitError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED))
+    }
+
+    // --- Network sync scheduling ---
+
+    private val hour = 60 * 60 * 1000L
+    private val now = 1_800_000_000_000L
+
+    @Test
+    fun `a library never synced is due`() {
+        assertEquals(DashTuneMusicService.SyncDecision.DUE, DashTuneMusicService.syncDecision(now, 0L, 0L))
+    }
+
+    @Test
+    fun `a sync that succeeded within six hours is not repeated`() {
+        assertEquals(
+            DashTuneMusicService.SyncDecision.RAN_RECENTLY,
+            DashTuneMusicService.syncDecision(now, now - 5 * hour, now - 5 * hour)
+        )
+    }
+
+    @Test
+    fun `a failed sync is not retried on every network flap`() {
+        // The car's connection drops and returns all drive; each return used to start a sync.
+        assertEquals(
+            DashTuneMusicService.SyncDecision.FAILED_RECENTLY,
+            DashTuneMusicService.syncDecision(now, now - 30 * hour, now - 10 * 60 * 1000L)
+        )
+    }
+
+    @Test
+    fun `a failed sync is retried once the backoff has passed`() {
+        assertEquals(
+            DashTuneMusicService.SyncDecision.DUE,
+            DashTuneMusicService.syncDecision(now, now - 30 * hour, now - DashTuneMusicService.SYNC_RETRY_BACKOFF_MS - 1)
+        )
+    }
+
+    @Test
+    fun `timestamps from the future count as long ago, not as recent`() {
+        // A car's clock can jump backwards; that must not suppress syncing for hours.
+        assertEquals(
+            DashTuneMusicService.SyncDecision.DUE,
+            DashTuneMusicService.syncDecision(now, now + hour, now + hour)
+        )
+    }
+
+    // --- Restoring the queue after the process was killed ---
+
+    private val playingMomentsAgo = now - 40_000L
+
+    private fun exit(reason: Int, at: Long = now - 30_000L) =
+        ExitReasonLogger.LastExit(reason, ExitReasonLogger.reasonName(reason), null, at)
+
+    @Test
+    fun `a listen killed by the system is restored`() {
+        assertTrue(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_LOW_MEMORY), playingMomentsAgo, now
+            )
+        )
+        assertTrue(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_SIGNALED), playingMomentsAgo, now
+            )
+        )
+    }
+
+    @Test
+    fun `a force stop or our own exit is not restored`() {
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_USER_REQUESTED), playingMomentsAgo, now
+            )
+        )
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_EXIT_SELF), playingMomentsAgo, now
+            )
+        )
+    }
+
+    @Test
+    fun `an exit from before the last listen belongs to an older process`() {
+        // Played in this process after an older one was killed: that record says nothing
+        // about this listen.
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_LOW_MEMORY, at = playingMomentsAgo - 60_000L),
+                playingMomentsAgo,
+                now
+            )
+        )
+    }
+
+    @Test
+    fun `an old listen is not restored`() {
+        val longAgo = now - DashTuneMusicService.RESTORE_AFTER_EXIT_WINDOW_MS - 1
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_LOW_MEMORY, at = longAgo + 1), longAgo, now
+            )
+        )
+        assertFalse(
+            DashTuneMusicService.shouldRestoreQueueAfterExit(
+                exit(android.app.ApplicationExitInfo.REASON_LOW_MEMORY), 0L, now
+            )
+        )
+    }
+
+    @Test
+    fun `without an exit record nothing is restored`() {
+        assertFalse(DashTuneMusicService.shouldRestoreQueueAfterExit(null, playingMomentsAgo, now))
+    }
 }

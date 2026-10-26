@@ -211,4 +211,27 @@ class JellyfinAccountManagerTest {
         assertTrue(JellyfinAccountManager.USERDATA_SERVER_KEY.startsWith(JellyfinAccountManager.ACCOUNT_TYPE))
         assertTrue(JellyfinAccountManager.USERDATA_SERVER_KEY.endsWith("server"))
     }
+
+    // --- invalidateToken ---
+
+    @Test
+    fun `invalidateToken drops the token but keeps the account and its server`() {
+        val account = Account("user", JellyfinAccountManager.ACCOUNT_TYPE)
+        every { accountManager.getAccountsByType(any()) } returns arrayOf(account)
+        every { accountManager.peekAuthToken(account, JellyfinAccountManager.TOKEN_TYPE) } returns "dead-token"
+
+        jellyfinAccountManager.invalidateToken()
+
+        verify { accountManager.invalidateAuthToken(JellyfinAccountManager.ACCOUNT_TYPE, "dead-token") }
+        verify(exactly = 0) { accountManager.removeAccountExplicitly(any()) }
+    }
+
+    @Test
+    fun `invalidateToken with no token does nothing`() {
+        every { accountManager.getAccountsByType(any()) } returns emptyArray()
+
+        jellyfinAccountManager.invalidateToken()
+
+        verify(exactly = 0) { accountManager.invalidateAuthToken(any(), any()) }
+    }
 }

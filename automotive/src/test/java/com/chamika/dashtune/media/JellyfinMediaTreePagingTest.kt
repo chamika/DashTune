@@ -1,5 +1,9 @@
 package com.chamika.dashtune.media
 
+import org.junit.Assert.assertTrue
+import org.jellyfin.sdk.api.client.exception.InvalidStatusException
+import kotlinx.coroutines.runBlocking
+import android.os.Looper
 import android.content.Context
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -169,4 +173,41 @@ class JellyfinMediaTreePagingTest {
         status = 200,
         headers = emptyMap()
     )
+
+    // --- Threading and a rejected token ---
+
+    @Test
+    fun `a request made from the main thread runs off it`() {
+        val main = Looper.getMainLooper()
+        assertEquals("Robolectric runs tests on the main looper", main, Looper.myLooper())
+        var requestedOnMain: Boolean? = null
+        coEvery { userLibraryApi.getItem(playlistId) } answers {
+            requestedOnMain = Looper.myLooper() == main
+            Response(
+                content = BaseItemDto(id = playlistId, type = BaseItemKind.PLAYLIST, name = "Long drive"),
+                status = 200,
+                headers = emptyMap()
+            )
+        }
+
+        runBlocking { tree.getItem(playlistId.toString()) }
+
+        assertEquals(false, requestedOnMain)
+    }
+
+    @Test
+    fun `a 401 is reported and not retried`() {
+        var rejected = 0
+        val api = mockk<ApiClient>(relaxed = true)
+        val failingLibrary = mockk<UserLibraryApi>()
+        every { api.userLibraryApi } returns failingLibrary
+        coEvery { failingLibrary.getItem(playlistId) } throws InvalidStatusException(401)
+        val rejectingTree = JellyfinMediaTree(context, api, mockk(relaxed = true)) { rejected++ }
+
+        val failure = runCatching { runBlocking { rejectingTree.getItem(playlistId.toString()) } }
+
+        assertTrue(failure.exceptionOrNull() is InvalidStatusException)
+        assertEquals(1, rejected)
+        coVerify(exactly = 1) { failingLibrary.getItem(playlistId) }
+    }
 }
