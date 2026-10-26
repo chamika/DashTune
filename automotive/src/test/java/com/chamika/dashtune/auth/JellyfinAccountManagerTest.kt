@@ -234,4 +234,28 @@ class JellyfinAccountManagerTest {
 
         verify(exactly = 0) { accountManager.invalidateAuthToken(any(), any()) }
     }
+
+    @Test
+    fun `storeAccount removes any other account so the new one is the one read`() {
+        val stale = Account("alice", JellyfinAccountManager.ACCOUNT_TYPE)
+        every { accountManager.getAccountsByType(JellyfinAccountManager.ACCOUNT_TYPE) } returns arrayOf(stale)
+        every { accountManager.getUserData(stale, JellyfinAccountManager.USERDATA_SERVER_KEY) } returns "http://server"
+
+        jellyfinAccountManager.storeAccount("http://server", "bob", "bob-token")
+
+        verify { accountManager.removeAccountExplicitly(stale) }
+        verify { accountManager.addAccountExplicitly(Account("bob", JellyfinAccountManager.ACCOUNT_TYPE), any(), any()) }
+    }
+
+    @Test
+    fun `storeAccount keeps the account it reuses`() {
+        val same = Account("alice", JellyfinAccountManager.ACCOUNT_TYPE)
+        every { accountManager.getAccountsByType(JellyfinAccountManager.ACCOUNT_TYPE) } returns arrayOf(same)
+        every { accountManager.getUserData(same, JellyfinAccountManager.USERDATA_SERVER_KEY) } returns "http://server"
+
+        jellyfinAccountManager.storeAccount("http://server", "alice", "new-token")
+
+        verify(exactly = 0) { accountManager.removeAccountExplicitly(any()) }
+        verify { accountManager.setAuthToken(same, JellyfinAccountManager.TOKEN_TYPE, "new-token") }
+    }
 }
