@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
+import android.media.AudioManager
 import android.net.Uri
 import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
@@ -363,5 +364,15 @@ class DashTuneMusicServiceTest {
         assertTrue(DashTuneMusicService.isStillQueuedOrCached(download(Download.STATE_QUEUED, "track-1"), cache))
         assertTrue(DashTuneMusicService.isStillQueuedOrCached(download(Download.STATE_DOWNLOADING, "track-1"), cache))
         assertFalse(DashTuneMusicService.isStillQueuedOrCached(download(Download.STATE_FAILED, "track-1"), cache))
+    }
+
+    // --- Focus watchdog ---
+
+    @Test
+    fun `a call or its ringing holds focus legitimately`() {
+        assertTrue(DashTuneMusicService.isCallInProgress(AudioManager.MODE_IN_CALL))
+        assertTrue(DashTuneMusicService.isCallInProgress(AudioManager.MODE_IN_COMMUNICATION))
+        assertTrue(DashTuneMusicService.isCallInProgress(AudioManager.MODE_RINGTONE))
+        assertFalse(DashTuneMusicService.isCallInProgress(AudioManager.MODE_NORMAL))
     }
 }

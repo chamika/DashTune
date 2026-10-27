@@ -234,6 +234,12 @@ automotive/src/main/java/com/chamika/dashtune/
   message) instead of clearing the player and saving an empty queue.
 - `FocusDenialRetry` re-asks a few times when audio focus is refused right at play() (ExoPlayer
   otherwise drops playWhenReady silently); later focus losses are left alone.
+- The service's watchdog (`focusRecovery`) re-requests focus after 8s stuck in a transient loss,
+  but not while `AudioManager.mode` shows a call (`isCallInProgress`): asking then gives focus up
+  for a refusal, and no GAIN follows when the call ends. Its request goes through
+  `FocusDenialRetry.recoverFocus`, which, if refused (a call the mode check missed, an
+  assistant), asks again every 5s for up to 15 min. Only a call or assistant can refuse media
+  focus, so this never takes focus from another media app. Verify on the car with a call >10s.
 - After a process death mid-listen (no crash, no `onDestroy`; seen in the car after a network
   flap), the service logs the `ApplicationExitInfo` reason (`last_exit_reason` key) and, if the
   exit was not intentional and it was playing within 5 min (`last_playing_at`), puts the saved

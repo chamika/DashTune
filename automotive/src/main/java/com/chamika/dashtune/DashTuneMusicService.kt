@@ -4,6 +4,7 @@ import android.accounts.AccountManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -134,6 +135,16 @@ class DashTuneMusicService : MediaLibraryService() {
         internal const val MAX_AUDIO_TRACK_INIT_RETRIES = 1
         internal const val AUDIO_TRACK_INIT_RETRY_DELAY_MS = 2_000L
 
+        /** Audio modes in which a call (or its ringing) owns the audio, not a stuck focus stack. */
+        internal fun isCallInProgress(audioMode: Int): Boolean = audioMode in setOf(
+            AudioManager.MODE_RINGTONE,
+            AudioManager.MODE_IN_CALL,
+            AudioManager.MODE_IN_COMMUNICATION,
+            AudioManager.MODE_CALL_SCREENING,
+            AudioManager.MODE_CALL_REDIRECT,
+            AudioManager.MODE_COMMUNICATION_REDIRECT,
+        )
+
         internal fun isAudioTrackInitError(errorCode: Int): Boolean =
             errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED
 
@@ -229,6 +240,7 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var callback: DashTuneSessionCallback
 
     private val handler: Handler = Handler(Looper.getMainLooper())
+    private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
     private var currentPlaybackTime: Long = 0
     private var currentTrack: MediaItem? = null
     private var isPlayingAudiobook: Boolean = false
@@ -543,10 +555,16 @@ class DashTuneMusicService : MediaLibraryService() {
             if (p.playWhenReady &&
                 p.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS
             ) {
+                // A call holds focus legitimately, and asking during it gives our focus up for
+                // a refusal: no GAIN would follow when it ends. Look again later instead.
+                if (isCallInProgress(audioManager.mode)) {
+                    Log.i(LOG_TAG, "Transient focus loss during a call; checking again later")
+                    handler.postDelayed(focusRecovery, FOCUS_RECOVERY_DELAY_MS)
+                    return@Runnable
+                }
                 Log.w(LOG_TAG, "Audio focus stuck in transient loss; re-requesting focus")
                 FirebaseUtils.safeLog("Audio focus recovery: re-requesting focus")
-                p.playWhenReady = false
-                p.playWhenReady = true
+                focusDenialRetry.recoverFocus()
             }
         }
 
