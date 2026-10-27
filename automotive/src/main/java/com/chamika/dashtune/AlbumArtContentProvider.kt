@@ -3,10 +3,12 @@ package com.chamika.dashtune
 import android.content.ContentProvider
 import android.content.ContentResolver
 import android.content.ContentValues
+import android.content.Context
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -24,6 +26,7 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
 class AlbumArtContentProvider : ContentProvider() {
@@ -39,8 +42,8 @@ class AlbumArtContentProvider : ContentProvider() {
             .fromApplication(context!!.applicationContext, AlbumArtEntryPoint::class.java)
             .okHttpClient()
             .newBuilder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(4, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
             .build()
     }
 
@@ -57,6 +60,18 @@ class AlbumArtContentProvider : ContentProvider() {
         private val inProgress = HashMap<Uri, CountDownLatch>()
         private val PLACEHOLDER_LOCK = Any()
         private const val PLACEHOLDER_SIZE_PX = 512
+
+        /**
+         * openFile runs on the caller's binder thread, and a process has only about fifteen.
+         * A Home grid asks for every tile at once, and in a tunnel each download would sit out
+         * its timeouts, so downloads are capped: a request that cannot get a slot quickly gets
+         * the placeholder, leaving binder threads free for the media session. Shorter waits
+         * than the network timeouts keep a stalled server from holding threads for long either.
+         */
+        private const val MAX_CONCURRENT_DOWNLOADS = 6
+        private const val DOWNLOAD_SLOT_WAIT_SECONDS = 2L
+        private const val IN_PROGRESS_WAIT_SECONDS = 8L
+        private val downloadSlots = Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
         fun mapUri(uri: Uri): Uri {
             val path = uri.encodedPath?.substring(1)?.replace('/', ':') ?: return Uri.EMPTY
@@ -116,44 +131,30 @@ class AlbumArtContentProvider : ContentProvider() {
 
         if (existingLatch != null) {
             Log.d(LOG_TAG, "Waiting for image download in separate thread... $remoteUri")
-            existingLatch.await(15, TimeUnit.SECONDS)
+            existingLatch.await(IN_PROGRESS_WAIT_SECONDS, TimeUnit.SECONDS)
             Log.d(LOG_TAG, "... Available!")
             return openOrPlaceholder(file)
         }
 
-        val tmpFile = File.createTempFile("dashtune-albumart", ".png", context.cacheDir)
-        val request: Request = Request.Builder()
-            .url(remoteUri.toString())
-            .build()
-
-        Log.d(LOG_TAG, "Downloading $remoteUri ...")
+        var tmpFile: File? = null
         try {
-            client.newCall(request).execute().use {
-                if (it.code == 200) {
-                    Log.d(LOG_TAG, "Downloaded $remoteUri")
-                    val source = it.body.source()
-                    source.request(Long.MAX_VALUE)
-
-                    val sink = tmpFile.sink().buffer()
-                    sink.writeAll(source)
-                    sink.flush()
-                    sink.close()
-
-                    roundInPlace(tmpFile)
-                    tmpFile.renameTo(file)
-                } else {
-                    Log.w(LOG_TAG, "Failed to download $remoteUri: \n ${it.code} - ${it.body}")
-                    // 404 just means the item has no artwork; the placeholder covers it.
-                    if (it.code != 404) {
-                        FirebaseUtils.safeSetCustomKey("album_art_path", remoteUri.path ?: "unknown")
-                        FirebaseUtils.safeRecordException(Exception("Album art download failed: HTTP ${it.code}"))
-                    }
-                }
+            // No network at all: nothing to wait for. Deliberately not "no validated network",
+            // since a LAN-only travel router never validates and its server is still reachable.
+            if (!hasNetwork(context)) return openOrPlaceholder(file)
+            if (!downloadSlots.tryAcquire(DOWNLOAD_SLOT_WAIT_SECONDS, TimeUnit.SECONDS)) {
+                Log.d(LOG_TAG, "No download slot free for $remoteUri; serving the placeholder")
+                return openOrPlaceholder(file)
+            }
+            try {
+                tmpFile = File.createTempFile("dashtune-albumart", ".png", context.cacheDir)
+                download(remoteUri, tmpFile, file)
+            } finally {
+                downloadSlots.release()
             }
         } catch (e: IOException) {
             Log.w(LOG_TAG, "Network error downloading $remoteUri", e)
         } finally {
-            tmpFile.delete()
+            tmpFile?.delete()
             synchronized(inProgress) {
                 inProgress[remoteUri]?.countDown()
                 inProgress.remove(remoteUri)
@@ -161,6 +162,40 @@ class AlbumArtContentProvider : ContentProvider() {
         }
 
         return openOrPlaceholder(file)
+    }
+
+    private fun hasNetwork(context: Context): Boolean = runCatching {
+        context.getSystemService(ConnectivityManager::class.java).activeNetwork != null
+    }.getOrDefault(true)
+
+    private fun download(remoteUri: Uri, tmpFile: File, file: File) {
+        val request: Request = Request.Builder()
+            .url(remoteUri.toString())
+            .build()
+
+        Log.d(LOG_TAG, "Downloading $remoteUri ...")
+        client.newCall(request).execute().use {
+            if (it.code == 200) {
+                Log.d(LOG_TAG, "Downloaded $remoteUri")
+                val source = it.body.source()
+                source.request(Long.MAX_VALUE)
+
+                val sink = tmpFile.sink().buffer()
+                sink.writeAll(source)
+                sink.flush()
+                sink.close()
+
+                roundInPlace(tmpFile)
+                tmpFile.renameTo(file)
+            } else {
+                Log.w(LOG_TAG, "Failed to download $remoteUri: \n ${it.code} - ${it.body}")
+                // 404 just means the item has no artwork; the placeholder covers it.
+                if (it.code != 404) {
+                    FirebaseUtils.safeSetCustomKey("album_art_path", remoteUri.path ?: "unknown")
+                    FirebaseUtils.safeRecordException(Exception("Album art download failed: HTTP ${it.code}"))
+                }
+            }
+        }
     }
 
     /**

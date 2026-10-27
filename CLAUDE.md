@@ -204,6 +204,11 @@ automotive/src/main/java/com/chamika/dashtune/
   the same radius. Bump the `.r1` suffix whenever the processing changes. When there is no image
   (404, offline, nothing cached) it serves `art_placeholder` rather than throwing. A throw makes the
   host draw its own square in a random flat colour. The placeholder is never cached per item.
+  `openFile` downloads on the caller's binder thread, so downloads are capped (6 at once, 2s
+  to get a slot, 4s/6s connect/read timeouts) and it serves the placeholder at once when there
+  is no network at all. Not "no validated network": LAN-only routers never validate. Fetching
+  in the background and calling `notifyChange` was rejected because the host's image loader
+  never asks again, so tiles would stay placeholders.
 - Section title typography is also the host's. `GROUP_TITLE` is only a string, so on the Volvo
   the titles come out large (like Spotify's) and on the reference emulator they come out small.
 - The shuffle tiles are ordinary grid items whose artwork (`art_shuffle`, `art_favourites`) is a
