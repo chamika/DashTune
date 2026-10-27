@@ -14,7 +14,6 @@ import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.OptIn
-import androidx.concurrent.futures.SuspendToFutureAdapter
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
@@ -52,20 +51,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpClientOptions
 import org.jellyfin.sdk.api.client.extensions.itemsApi
-import org.jellyfin.sdk.api.client.extensions.playStateApi
 import org.jellyfin.sdk.api.client.extensions.universalAudioApi
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ItemFilter
-import org.jellyfin.sdk.model.api.PlaybackStartInfo
-import org.jellyfin.sdk.model.api.PlaybackOrder
-import org.jellyfin.sdk.model.api.PlaybackStopInfo
-import org.jellyfin.sdk.model.api.PlayMethod
-import org.jellyfin.sdk.model.api.RepeatMode
 import org.jellyfin.sdk.model.api.UpdateUserItemDataDto
 import org.jellyfin.sdk.model.serializer.toUUID
 import kotlin.time.Duration.Companion.seconds
@@ -247,6 +239,8 @@ class DashTuneMusicService : MediaLibraryService() {
 
     private lateinit var playbackPoll: Runnable
     private lateinit var audiobookPositionReporter: Runnable
+    private lateinit var progressReport: Runnable
+    private lateinit var reporter: PlaybackReporter
     private lateinit var playerListener: Player.Listener
     private lateinit var focusRecovery: Runnable
     private lateinit var networkErrorRetry: Runnable
@@ -301,6 +295,16 @@ class DashTuneMusicService : MediaLibraryService() {
                 requestTimeout = 7.seconds,
                 socketTimeout = 7.seconds,
             )
+        )
+
+        reporter = PlaybackReporter(
+            api = jellyfinApi,
+            prefs = PreferenceManager.getDefaultSharedPreferences(this),
+            scope = reportScope,
+            isTranscoding = {
+                PreferenceManager.getDefaultSharedPreferences(this)
+                    .getString("bitrate", "Direct stream") != "Direct stream"
+            },
         )
 
         // Setup offline cache
@@ -445,7 +449,12 @@ class DashTuneMusicService : MediaLibraryService() {
                         putInt(PLAYLIST_INDEX_PREF, player.currentMediaItemIndex)
                     }
 
-                    SuspendToFutureAdapter.launchFuture { reportPlayback(player) }
+                    // The old track's session ends where the poll last saw it; the new one
+                    // starts now if it is meant to play (a queue restored paused waits).
+                    reporter.stopped(currentPlaybackTime)
+                    val started = player.currentMediaItem?.mediaId
+                    if (started != null && player.playWhenReady) reporter.started(started)
+                    logFormat(player)
 
                     // Prefetch next tracks
                     val prefetchCount = PreferenceManager
@@ -468,10 +477,10 @@ class DashTuneMusicService : MediaLibraryService() {
                         networkErrorRetries = 0
                         audioTrackInitRetries = 0
                         consecutiveErrorSkips = 0
-                        startPlaybackPoll()
-                        if (isPlayingAudiobook && player.currentMediaItem != null) {
-                            reportAudiobookStart(player)
+                        player.currentMediaItem?.mediaId?.let {
+                            if (reporter.openItemId != it) reporter.started(it)
                         }
+                        startPlaybackPoll()
                     } else {
                         stopPlaybackPoll()
                         // Save audiobook position — reportAudiobookStopped uses currentTrack
@@ -485,6 +494,15 @@ class DashTuneMusicService : MediaLibraryService() {
                         val listenStopped = !player.playWhenReady ||
                                 player.playbackState == Player.STATE_ENDED
                         if (listenStopped && ::callback.isInitialized) callback.invalidateHome()
+                        // A pause keeps the session open (Stopped would end it); the end of the
+                        // queue closes it.
+                        if (player.playbackState == Player.STATE_ENDED) {
+                            reporter.stopped(player.currentPosition)
+                        } else if (!player.playWhenReady) {
+                            player.currentMediaItem?.mediaId?.let {
+                                reporter.progress(it, player.currentPosition, isPaused = true)
+                            }
+                        }
                     }
                 }
 
@@ -535,6 +553,15 @@ class DashTuneMusicService : MediaLibraryService() {
                     putLong(LAST_PLAYING_AT_PREF, System.currentTimeMillis())
                 }
                 handler.postDelayed(playbackPoll, 1000)
+            }
+        }
+
+        progressReport = Runnable {
+            val p = mediaLibrarySession.player
+            val id = p.currentMediaItem?.mediaId
+            if (p.isPlaying && id != null) {
+                reporter.progress(id, p.currentPosition, isPaused = false)
+                handler.postDelayed(progressReport, PlaybackReporter.PROGRESS_INTERVAL_MS)
             }
         }
 
@@ -645,6 +672,8 @@ class DashTuneMusicService : MediaLibraryService() {
                 // runs on a ConnectivityManager thread; the session must be told on main.
                 handler.post { if (::callback.isInitialized) callback.invalidateHome() }
                 handler.post { networkSync.onAvailable(network) }
+                // Stopped reports kept while offline: the plays still count.
+                handler.post { reporter.flushPending() }
             }
 
             // Sync waits for a validated network; see NetworkSyncScheduler.
@@ -691,6 +720,8 @@ class DashTuneMusicService : MediaLibraryService() {
     private fun startPlaybackPoll() {
         handler.removeCallbacks(playbackPoll)
         handler.post(playbackPoll)
+        handler.removeCallbacks(progressReport)
+        handler.postDelayed(progressReport, PlaybackReporter.PROGRESS_INTERVAL_MS)
         if (isPlayingAudiobook) {
             handler.removeCallbacks(audiobookPositionReporter)
             handler.postDelayed(audiobookPositionReporter, AUDIOBOOK_POSITION_REPORT_INTERVAL_MS)
@@ -699,6 +730,7 @@ class DashTuneMusicService : MediaLibraryService() {
 
     private fun stopPlaybackPoll() {
         handler.removeCallbacks(playbackPoll)
+        handler.removeCallbacks(progressReport)
         handler.removeCallbacks(audiobookPositionReporter)
     }
 
@@ -745,6 +777,10 @@ class DashTuneMusicService : MediaLibraryService() {
 
         // Destroyed mid-book without a pause first: save where it got to before the player goes.
         if (mediaLibrarySession.player.isPlaying) reportAudiobookStopped(mediaLibrarySession.player)
+        // Stopping the service ends whatever session is open; reporter's scope survives this.
+        reporter.stopped(
+            if (mediaLibrarySession.player.isPlaying) mediaLibrarySession.player.currentPosition else currentPlaybackTime
+        )
         mediaLibrarySession.release()
         mediaLibrarySession.player.removeListener(playerListener)
         mediaLibrarySession.player.removeListener(focusDenialRetry)
@@ -752,6 +788,7 @@ class DashTuneMusicService : MediaLibraryService() {
         mediaLibrarySession.player.release()
         handler.removeCallbacks(playbackPoll)
         handler.removeCallbacks(audiobookPositionReporter)
+        handler.removeCallbacks(progressReport)
         handler.removeCallbacks(focusRecovery)
         handler.removeCallbacks(networkErrorRetry)
         handler.removeCallbacks(audioTrackRetry)
@@ -954,71 +991,9 @@ class DashTuneMusicService : MediaLibraryService() {
         }
     }
 
-    private fun reportAudiobookStart(player: Player) {
-        val mediaId = player.currentMediaItem?.mediaId ?: return
-        Log.i(LOG_TAG, "Audiobook started: $mediaId")
-        reportScope.launch {
-            try {
-                jellyfinApi.playStateApi.reportPlaybackStart(
-                    PlaybackStartInfo(
-                        itemId = mediaId.toUUID(),
-                        canSeek = true,
-                        isPaused = false,
-                        isMuted = false,
-                        playMethod = PlayMethod.DIRECT_PLAY,
-                        repeatMode = RepeatMode.REPEAT_NONE,
-                        playbackOrder = PlaybackOrder.DEFAULT
-                    )
-                )
-            } catch (e: Exception) {
-                Log.w(LOG_TAG, "Failed to report audiobook start", e)
-            }
-        }
-    }
-
-    private suspend fun reportPlayback(player: Player) {
-        // Player state is read here, on main; the reports go out on IO, because the SDK
-        // reads each response body on whichever thread resumes it.
-        val stoppedId = currentTrack?.mediaId
-        val stoppedPositionMs = currentPlaybackTime
-        val startedId = player.currentMediaItem?.mediaId
-        if (startedId != null) {
-            val exoPlayer = player as ExoPlayer
-            val format = exoPlayer.audioFormat
-            val formatString = "${format?.containerMimeType} at ${format?.averageBitrate} bps"
-
-            Log.i(
-                LOG_TAG,
-                "Playing $formatString: ${exoPlayer.currentMediaItem?.localConfiguration?.uri}"
-            )
-        }
-
-        withContext(Dispatchers.IO) {
-            if (stoppedId != null) {
-                Log.i(LOG_TAG, "Reporting playback stopped: $stoppedPositionMs")
-                jellyfinApi.playStateApi.reportPlaybackStopped(
-                    PlaybackStopInfo(
-                        itemId = stoppedId.toUUID(),
-                        positionTicks = MILLISECONDS_TO_TICKS * stoppedPositionMs,
-                        failed = false
-                    )
-                )
-            }
-
-            if (startedId != null) {
-                jellyfinApi.playStateApi.reportPlaybackStart(
-                    PlaybackStartInfo(
-                        itemId = startedId.toUUID(),
-                        canSeek = true,
-                        isPaused = false,
-                        isMuted = false,
-                        playMethod = PlayMethod.DIRECT_PLAY,
-                        repeatMode = RepeatMode.REPEAT_NONE,
-                        playbackOrder = PlaybackOrder.DEFAULT
-                    )
-                )
-            }
-        }
+    private fun logFormat(player: Player) {
+        val format = (player as ExoPlayer).audioFormat
+        Log.i(LOG_TAG, "Playing ${format?.containerMimeType} at ${format?.averageBitrate} bps")
     }
 
     private val downloadListener = object : DownloadManager.Listener {

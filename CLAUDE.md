@@ -152,6 +152,10 @@ automotive/src/main/java/com/chamika/dashtune/
   in the URL. Favourites share the LRU cache, so a `COMPLETED` favourite is re-queued when its
   bytes have been evicted (`isStillQueuedOrCached`).
 - Playback position saved every 1s, restored on playback resumption
+- `PlaybackReporter` sends Jellyfin Start (when a track starts playing), Progress (every 20s, and
+  paused on pause) and Stopped (track change, end of queue, `onDestroy`) on `reportScope`. A
+  Stopped that fails offline is kept in prefs (max 50) and sent on network return or after the
+  next successful report. `playMethod` is TRANSCODE when a bitrate cap is set.
 - Room (`MediaRepository`) caches browse results. `NetworkSyncScheduler` runs `sync()` once per
   *validated* network (`NET_CAPABILITY_VALIDATED`, then a 10s settle; a network still unvalidated
   after 60s, e.g. a LAN-only travel router, gets a try anyway), when the last
