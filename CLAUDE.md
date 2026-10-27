@@ -150,6 +150,8 @@ automotive/src/main/java/com/chamika/dashtune/
   DAO's `@Transaction` replaces. Playlist tracks are synced; album tracks cache on first play.
 - Container children are fetched in pages of 200 (`JellyfinMediaTree.fetchAllPages`): the SDK's
   request timeout covers the whole body, so one response for a long playlist never finished.
+  The Artists/Albums letter buckets, Genres, a genre's albums, Playlists and Books page the same
+  way, so a large library is never cut off; only Latest and Random stay capped at 120.
 - `retryOnFailure` retries refused connections and DNS failures (searching the whole cause chain,
   since the SDK wraps them), not requests that already sat through the read timeout.
 - **Never make an SDK call from the main thread.** The SDK awaits the call, then reads the response

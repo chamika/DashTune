@@ -271,77 +271,61 @@ class JellyfinMediaTree(
         val startsWith = if (letter == "#") null else letter
         val lessThan = if (letter == "#") "A" else null
 
-        return retryOnFailure {
-            val items = if (categoryId == ARTISTS) {
-                api.artistsApi.getAlbumArtists(
-                    nameStartsWith = startsWith,
-                    nameLessThan = lessThan,
-                    sortBy = listOf(ItemSortBy.SORT_NAME),
-                    sortOrder = listOf(SortOrder.ASCENDING),
-                    limit = MAX_ITEMS
-                ).content.items
-            } else {
-                api.itemsApi.getItems(
-                    includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
-                    recursive = true,
-                    nameStartsWith = startsWith,
-                    nameLessThan = lessThan,
-                    sortBy = listOf(ItemSortBy.SORT_NAME),
-                    sortOrder = listOf(SortOrder.ASCENDING),
-                    limit = MAX_ITEMS
-                ).content.items
-            }
-
-            items.mapNotNull {
-                try {
-                    val item = itemFactory.create(it)
-                    mediaItems.put(item.mediaId, item)
-                    item
-                } catch (e: UnsupportedOperationException) {
-                    Log.w(LOG_TAG, "Skipping unsupported item type in $categoryId: ${it.type}")
-                    null
+        val items = fetchAllPages { startIndex ->
+            retryOnFailure {
+                if (categoryId == ARTISTS) {
+                    api.artistsApi.getAlbumArtists(
+                        nameStartsWith = startsWith,
+                        nameLessThan = lessThan,
+                        sortBy = listOf(ItemSortBy.SORT_NAME),
+                        sortOrder = listOf(SortOrder.ASCENDING),
+                        startIndex = startIndex,
+                        limit = CHILDREN_PAGE_SIZE
+                    ).content
+                } else {
+                    api.itemsApi.getItems(
+                        includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
+                        recursive = true,
+                        nameStartsWith = startsWith,
+                        nameLessThan = lessThan,
+                        sortBy = listOf(ItemSortBy.SORT_NAME),
+                        sortOrder = listOf(SortOrder.ASCENDING),
+                        startIndex = startIndex,
+                        limit = CHILDREN_PAGE_SIZE
+                    ).content
                 }
             }
         }
+
+        return items.toMediaItems(categoryId)
     }
 
-    private suspend fun getGenres(): List<MediaItem> = retryOnFailure {
-        val response = api.genresApi.getGenres(
-            includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
-            sortBy = listOf(ItemSortBy.SORT_NAME),
-            sortOrder = listOf(SortOrder.ASCENDING),
-            limit = MAX_ITEMS
-        )
-
-        response.content.items.mapNotNull {
-            try {
-                val item = itemFactory.create(it)
-                mediaItems.put(item.mediaId, item)
-                item
-            } catch (e: UnsupportedOperationException) {
-                Log.w(LOG_TAG, "Skipping unsupported item type in genres: ${it.type}")
-                null
-            }
-        }
-    }
-
-    private suspend fun getGenreAlbums(genreId: String): List<MediaItem> {
-        val albums = retryOnFailure {
-            val response = api.itemsApi.getItems(
+    private suspend fun getGenres(): List<MediaItem> = fetchAllPages { startIndex ->
+        retryOnFailure {
+            api.genresApi.getGenres(
                 includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
-                recursive = true,
-                genreIds = listOf(genreId.toUUID()),
                 sortBy = listOf(ItemSortBy.SORT_NAME),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = MAX_ITEMS
-            )
-
-            response.content.items.map {
-                val item = itemFactory.create(it)
-                mediaItems.put(item.mediaId, item)
-                item
-            }
+                startIndex = startIndex,
+                limit = CHILDREN_PAGE_SIZE
+            ).content
         }
+    }.toMediaItems("genres")
+
+    private suspend fun getGenreAlbums(genreId: String): List<MediaItem> {
+        val albums = fetchAllPages { startIndex ->
+            retryOnFailure {
+                api.itemsApi.getItems(
+                    includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
+                    recursive = true,
+                    genreIds = listOf(genreId.toUUID()),
+                    sortBy = listOf(ItemSortBy.SORT_NAME),
+                    sortOrder = listOf(SortOrder.ASCENDING),
+                    startIndex = startIndex,
+                    limit = CHILDREN_PAGE_SIZE
+                ).content
+            }
+        }.toMediaItems("genre $genreId")
 
         if (albums.isEmpty()) return albums
 
@@ -399,35 +383,38 @@ class JellyfinMediaTree(
         }
     }
 
-    private suspend fun getPlaylists(): List<MediaItem> = retryOnFailure {
-        val response = api.itemsApi.getItems(
-            includeItemTypes = listOf(BaseItemKind.PLAYLIST),
-            recursive = true,
-            sortOrder = listOf(SortOrder.DESCENDING),
-            sortBy = listOf(ItemSortBy.DATE_CREATED),
-            limit = MAX_ITEMS
-        )
-
-        response.content.items.map {
-            val item = itemFactory.create(it)
-            mediaItems.put(item.mediaId, item)
-            item
+    private suspend fun getPlaylists(): List<MediaItem> = fetchAllPages { startIndex ->
+        retryOnFailure {
+            api.itemsApi.getItems(
+                includeItemTypes = listOf(BaseItemKind.PLAYLIST),
+                recursive = true,
+                sortOrder = listOf(SortOrder.DESCENDING),
+                sortBy = listOf(ItemSortBy.DATE_CREATED),
+                startIndex = startIndex,
+                limit = CHILDREN_PAGE_SIZE
+            ).content
         }
-    }
+    }.toMediaItems("playlists")
 
-    private suspend fun getBooks(): List<MediaItem> = retryOnFailure {
-        val views = api.userViewsApi.getUserViews()
-        val booksLibrary = views.content.items.firstOrNull {
-            it.collectionType == CollectionType.BOOKS
-        } ?: return@retryOnFailure emptyList()
+    private suspend fun getBooks(): List<MediaItem> {
+        val booksLibrary = retryOnFailure {
+            api.userViewsApi.getUserViews().content.items.filter {
+                it.collectionType == CollectionType.BOOKS
+            }
+        }.firstOrNull() ?: return emptyList()
 
-        val response = api.itemsApi.getItems(
-            parentId = booksLibrary.id,
-            sortBy = listOf(ItemSortBy.SORT_NAME),
-            limit = MAX_ITEMS
-        )
+        val books = fetchAllPages { startIndex ->
+            retryOnFailure {
+                api.itemsApi.getItems(
+                    parentId = booksLibrary.id,
+                    sortBy = listOf(ItemSortBy.SORT_NAME),
+                    startIndex = startIndex,
+                    limit = CHILDREN_PAGE_SIZE
+                ).content
+            }
+        }
 
-        response.content.items.mapNotNull {
+        return books.mapNotNull {
             try {
                 val item = itemFactory.create(it, isAudiobook = true)
                 mediaItems.put(item.mediaId, item)
