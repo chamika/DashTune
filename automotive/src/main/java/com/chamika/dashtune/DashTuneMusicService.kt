@@ -360,6 +360,16 @@ class DashTuneMusicService : MediaLibraryService() {
                 FirebaseUtils.safeSetCustomKey("failed_track_id", failedId ?: "")
                 FirebaseUtils.safeRecordException(error)
 
+                if (ApiErrors.isUnauthorizedStream(error)) {
+                    // Every other track would be refused the same way, so skipping on would
+                    // walk the queue and stop with no sign-in offered. Leave the error showing
+                    // and the queue in place, and let the callback check the token.
+                    Log.w(LOG_TAG, "Stream refused with 401; checking the token")
+                    FirebaseUtils.safeLog("Stream refused with 401; checking the token")
+                    callback.onStreamUnauthorized(mediaLibrarySession)
+                    return
+                }
+
                 if (isAudioTrackInitError(error.errorCode) &&
                     audioTrackInitRetries < MAX_AUDIO_TRACK_INIT_RETRIES
                 ) {

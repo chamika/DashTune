@@ -349,6 +349,15 @@ class DashTuneSessionCallback(
         }
     }
 
+    /**
+     * ExoPlayer got 401 for an audio stream. Same check as a refused browse; if the token is
+     * dead, the error that follows offers sign-in on the playback screen too.
+     */
+    fun onStreamUnauthorized(session: MediaLibraryService.MediaLibrarySession) {
+        if (librarySession == null) librarySession = session
+        onTokenRejected()
+    }
+
     private suspend fun confirmTokenRejected() {
         repeat(TOKEN_CONFIRMATIONS) { attempt ->
             if (attempt > 0) delay(TOKEN_CONFIRM_GAP_MS)
@@ -365,6 +374,15 @@ class DashTuneSessionCallback(
         withContext(Dispatchers.Main) {
             librarySession?.notifyChildrenChanged(ROOT_ID, 4, null)
             homeSession?.notifyChildrenChanged(HOME, homeChildCount, null)
+            // A queue that stopped on a refused stream shows its error on the playback screen,
+            // which no re-browse reaches; this one carries the sign-in action.
+            librarySession?.sendError(
+                SessionError(
+                    SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED,
+                    service.getString(R.string.sign_in_to_your_jellyfin_server),
+                    authenticationExtras()
+                )
+            )
         }
     }
 

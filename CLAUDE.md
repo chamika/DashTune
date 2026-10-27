@@ -169,7 +169,10 @@ automotive/src/main/java/com/chamika/dashtune/
 - A 401 may mean the token is dead. The tree reports it (`onUnauthorized`, since browse and Home
   swallow fetch failures); the callback then checks `/Users/Me` in the background, twice 3s
   apart, and only if both are refused drops the token and notifies the root so the head unit
-  re-browses into `ERROR_SESSION_AUTHENTICATION_EXPIRED` with the sign-in action. A check the
+  re-browses into `ERROR_SESSION_AUTHENTICATION_EXPIRED` with the sign-in action, and sends the
+  same error (with the sign-in action) to the playback screen. A 401 on an audio stream
+  (`ApiErrors.isUnauthorizedStream`) starts the same check: the player stays on the error with
+  its queue instead of skipping every track. A check the
   server passes suppresses re-checks for 30s. `storeAccount` removes any other account, since
   every getter reads the first and a token-less one left by a 401 would shadow a new sign-in. Unreachable-server failures
   (`ApiErrors.isOffline`) are breadcrumbs, not Crashlytics issues (`safeRecordApiException`).
