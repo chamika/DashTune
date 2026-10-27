@@ -14,6 +14,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFI
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import org.jellyfin.sdk.api.client.exception.InvalidStatusException
 import kotlinx.coroutines.test.runTest
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.Response
@@ -382,5 +383,39 @@ class JellyfinMediaTreeBrowseTest {
         assertEquals(ARTISTS, tree.getItem(ARTISTS).mediaId)
         assertEquals(ALBUMS, tree.getItem(ALBUMS).mediaId)
         assertEquals(GENRES, tree.getItem(GENRES).mediaId)
+    }
+
+    // --- Search ---
+
+    @Test
+    fun `search shows the kinds that answered when another kind fails`() = runTest {
+        coEvery { artistsApi.getAlbumArtists(searchTerm = "nev", limit = 10) } throws InvalidStatusException(500)
+        coEvery {
+            itemsApi.getItems(
+                recursive = true,
+                searchTerm = "nev",
+                includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
+                limit = 10
+            )
+        } returns result(dto(BaseItemKind.MUSIC_ALBUM, "Nevermind"))
+        coEvery {
+            itemsApi.getItems(recursive = true, searchTerm = "nev", includeItemTypes = neq(listOf(BaseItemKind.MUSIC_ALBUM)), limit = any())
+        } returns result()
+
+        val results = tree.search("nev")
+
+        assertEquals(listOf("Nevermind"), results.map { it.mediaMetadata.title.toString() })
+    }
+
+    @Test
+    fun `search fails only when every kind failed`() = runTest {
+        coEvery { artistsApi.getAlbumArtists(searchTerm = "x", limit = 10) } throws InvalidStatusException(500)
+        coEvery {
+            itemsApi.getItems(recursive = true, searchTerm = "x", includeItemTypes = any(), limit = any())
+        } throws InvalidStatusException(500)
+
+        val failure = runCatching { tree.search("x") }.exceptionOrNull()
+
+        assertTrue(failure is InvalidStatusException)
     }
 }

@@ -14,6 +14,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -648,5 +649,28 @@ class MediaRepositoryTest {
 
         assertEquals(1, result.size)
         assertEquals("track-1", result[0].mediaId)
+    }
+
+    @Test
+    fun `the same query asked again is answered without another search`() = runTest {
+        coEvery { tree.search("query") } returns listOf(MediaItem.Builder().setMediaId("track-1").build())
+
+        repository.search("query")
+        repository.search("query")
+
+        coVerify(exactly = 1) { tree.search("query") }
+    }
+
+    @Test
+    fun `a different query or an invalidated cache searches again`() = runTest {
+        coEvery { tree.search(any()) } returns emptyList()
+
+        repository.search("one")
+        repository.search("two")
+        repository.invalidateCache()
+        repository.search("two")
+
+        coVerify(exactly = 1) { tree.search("one") }
+        coVerify(exactly = 2) { tree.search("two") }
     }
 }

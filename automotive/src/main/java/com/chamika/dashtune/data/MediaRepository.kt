@@ -318,9 +318,25 @@ class MediaRepository(
         }
     }
 
+    /**
+     * A head unit asks for every query twice — onSearch for the count, then onGetSearchResult
+     * for the items — so the last answer is kept briefly and the second ask costs nothing.
+     */
     suspend fun search(query: String): List<MediaItem> {
-        return tree.search(query)
+        lastSearch?.let {
+            if (it.query == query && SystemClock.elapsedRealtime() < it.expiresAtMs) return it.results
+        }
+        val results = tree.search(query)
+        lastSearch = SearchResult(query, results, SystemClock.elapsedRealtime() + searchTtlMs)
+        return results
     }
+
+    private class SearchResult(val query: String, val results: List<MediaItem>, val expiresAtMs: Long)
+
+    private val searchTtlMs = 30 * 1000L
+
+    @Volatile
+    private var lastSearch: SearchResult? = null
 
     suspend fun getShuffledTracks(folderId: String): List<MediaItem> {
         return try {
@@ -353,6 +369,7 @@ class MediaRepository(
 
     fun invalidateCache() {
         tree.invalidateCache()
+        lastSearch = null
         invalidateHome()
     }
 
