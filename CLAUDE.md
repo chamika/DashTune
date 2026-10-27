@@ -215,7 +215,9 @@ automotive/src/main/java/com/chamika/dashtune/
 - `MediaItemFactory.forAudiobook()` creates browsable/playable items with `IS_AUDIOBOOK_KEY` metadata flag
 - Browse hierarchy: Books category → Folders/Collections → Individual books → Chapters
 - Multi-chapter audiobooks expand into ordered playlists via `expandSingleItem()` in `DashTuneSessionCallback`
-- Position saved to Jellyfin server via `itemsApi.updateItemUserData()` (UserData API) on pause/stop
+- Position saved to Jellyfin server via `itemsApi.updateItemUserData()` (UserData API) on pause/stop,
+  and on `onDestroy` if still playing. The saves run in `reportScope`, which `onDestroy` does not
+  cancel: swiping the app away pauses then stops it, and cancelling there lost the last position.
 - Position restored from server via `userLibraryApi.getItem()` → `userData.playbackPositionTicks`
 - AAOS completion status extras show progress bars on chapter items in browse UI
 - Shuffle auto-disabled when audiobook content detected, restored when switching to music

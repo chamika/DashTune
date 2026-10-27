@@ -250,6 +250,13 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var networkSync: NetworkSyncScheduler
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    /**
+     * Reports to the server outlive the service on purpose: the save sent as playback pauses is
+     * often launched moments before onDestroy (swiping the app away pauses, then stops it), and
+     * cancelling it there lost the last position. Each call is bounded by the SDK timeouts.
+     */
+    private val reportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == "browse_categories") {
             mediaLibrarySession.notifyChildrenChanged(ROOT_ID, 4, null)
@@ -718,6 +725,8 @@ class DashTuneMusicService : MediaLibraryService() {
         Log.i(LOG_TAG, "onDestroy")
         FirebaseUtils.safeLog("Service destroyed")
 
+        // Destroyed mid-book without a pause first: save where it got to before the player goes.
+        if (mediaLibrarySession.player.isPlaying) reportAudiobookStopped(mediaLibrarySession.player)
         mediaLibrarySession.release()
         mediaLibrarySession.player.removeListener(playerListener)
         mediaLibrarySession.player.removeListener(focusDenialRetry)
@@ -895,7 +904,7 @@ class DashTuneMusicService : MediaLibraryService() {
         val positionMs = if (currentTrack != null) currentPlaybackTime else player.currentPosition
         val ticks = msToTicks(positionMs)
         Log.i(LOG_TAG, "Audiobook stopped: $mediaId at ${positionMs}ms")
-        serviceScope.launch(Dispatchers.IO) {
+        reportScope.launch {
             try {
                 jellyfinApi.itemsApi.updateItemUserData(
                     itemId = mediaId.toUUID(),
@@ -915,7 +924,7 @@ class DashTuneMusicService : MediaLibraryService() {
         val positionMs = currentPlaybackTime
         val ticks = msToTicks(positionMs)
         Log.d(LOG_TAG, "Audiobook progress: ${track.mediaId} at ${positionMs}ms")
-        serviceScope.launch(Dispatchers.IO) {
+        reportScope.launch {
             try {
                 jellyfinApi.itemsApi.updateItemUserData(
                     itemId = track.mediaId.toUUID(),
@@ -930,7 +939,7 @@ class DashTuneMusicService : MediaLibraryService() {
     private fun reportAudiobookStart(player: Player) {
         val mediaId = player.currentMediaItem?.mediaId ?: return
         Log.i(LOG_TAG, "Audiobook started: $mediaId")
-        serviceScope.launch(Dispatchers.IO) {
+        reportScope.launch {
             try {
                 jellyfinApi.playStateApi.reportPlaybackStart(
                     PlaybackStartInfo(
