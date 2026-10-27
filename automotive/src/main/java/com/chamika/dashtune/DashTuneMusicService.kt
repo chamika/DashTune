@@ -23,6 +23,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.NoOpCacheEvictor
@@ -163,6 +164,23 @@ class DashTuneMusicService : MediaLibraryService() {
          */
         @Volatile
         private var lastExitHandled = false
+
+        /**
+         * Favourites share the LRU cache with streaming, so a download the index still calls
+         * COMPLETED may have been evicted since. It only counts if its bytes are still there,
+         * under the track-id key playback reads (older downloads were keyed by URL).
+         */
+        internal fun isStillQueuedOrCached(download: Download, cache: Cache): Boolean =
+            when (download.state) {
+                Download.STATE_DOWNLOADING, Download.STATE_QUEUED -> true
+                Download.STATE_COMPLETED -> {
+                    val key = download.request.customCacheKey
+                    val length = download.contentLength.takeIf { it != C.LENGTH_UNSET.toLong() }
+                        ?: download.bytesDownloaded
+                    key == download.request.id && length > 0 && cache.isCached(key, 0, length)
+                }
+                else -> false
+            }
 
         /** Converts a playback position in milliseconds to Jellyfin's 100-ns tick units. */
         internal fun msToTicks(positionMs: Long): Long = positionMs * MILLISECONDS_TO_TICKS
@@ -791,7 +809,9 @@ class DashTuneMusicService : MediaLibraryService() {
             val id = mediaItem.mediaId
 
             try {
-                val downloadRequest = DownloadRequest.Builder(id, uri).build()
+                val downloadRequest = DownloadRequest.Builder(id, uri)
+                    .setCustomCacheKey(mediaItem.localConfiguration?.customCacheKey ?: id)
+                    .build()
                 downloadManager.addDownload(downloadRequest)
                 downloadManager.resumeDownloads()
             } catch (e: Exception) {
@@ -824,14 +844,7 @@ class DashTuneMusicService : MediaLibraryService() {
                     try {
                         val id = item.id.toString()
                         val existing = downloadManager.downloadIndex.getDownload(id)
-                        if (existing != null && existing.state in listOf(
-                                Download.STATE_COMPLETED,
-                                Download.STATE_DOWNLOADING,
-                                Download.STATE_QUEUED
-                            )
-                        ) {
-                            continue
-                        }
+                        if (existing != null && isStillQueuedOrCached(existing, downloadCache)) continue
                         val streamUrl = jellyfinApi.universalAudioApi.getUniversalAudioStreamUrl(
                             item.id,
                             container = allowedContainers,
@@ -843,7 +856,7 @@ class DashTuneMusicService : MediaLibraryService() {
                         val downloadRequest = DownloadRequest.Builder(
                             item.id.toString(),
                             streamUrl.toUri()
-                        ).build()
+                        ).setCustomCacheKey(id).build()
                         downloadManager.addDownload(downloadRequest)
                         queued++
                     } catch (e: Exception) {

@@ -554,6 +554,7 @@ class MediaRepository(
         val isAudiobook = extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
         if (isPlayable && (mediaType == MEDIA_TYPE_MUSIC || isAudiobook)) {
             itemBuilder.setUri(itemFactory.streamingUri(mediaId))
+                .setCustomCacheKey(mediaId)
         }
 
         return itemBuilder.build()

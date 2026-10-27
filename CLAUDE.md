@@ -134,6 +134,10 @@ automotive/src/main/java/com/chamika/dashtune/
 - ExoPlayer `CacheDataSource` wraps HTTP requests with disk cache (LRU eviction)
 - Cache size configurable: 100MB - 2GB (default 200MB)
 - On track change, prefetches next 5 tracks via `DownloadManager`
+- Cached audio is keyed by the track id (`customCacheKey` on the `MediaItem` and every
+  `DownloadRequest`), not the stream URL, so a cached copy plays whatever the bitrate or host
+  in the URL. Favourites share the LRU cache, so a `COMPLETED` favourite is re-queued when its
+  bytes have been evicted (`isStillQueuedOrCached`).
 - Playback position saved every 1s, restored on playback resumption
 - Room (`MediaRepository`) caches browse results. `NetworkSyncScheduler` runs `sync()` once per
   *validated* network (`NET_CAPABILITY_VALIDATED`, then a 10s settle; a network still unvalidated
