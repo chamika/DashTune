@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.annotation.OptIn
 import androidx.concurrent.futures.SuspendToFutureAdapter
 import androidx.core.content.edit
+import androidx.media3.common.C
 import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -531,20 +532,28 @@ class DashTuneSessionCallback(
         startIndex: Int,
         startPositionMs: Long,
     ): MediaSession.MediaItemsWithStartPosition {
+        val voiceQuery = MediaItemResolver.voiceQuery(mediaItems)
+
         // The Home "Continue listening" tile: restore exactly what onPlaybackResumption
-        // would have, but on an explicit tap rather than a headunit-initiated resume.
-        if (mediaItems.size == 1 && mediaItems[0].mediaId == RESUME_QUEUE) {
+        // would have, but on an explicit tap rather than a headunit-initiated resume. "Play
+        // DashTune" by voice, naming nothing, means the same.
+        if (mediaItems.size == 1 && mediaItems[0].mediaId == RESUME_QUEUE || voiceQuery?.isBlank() == true) {
             val saved = loadSavedQueue()
-            if (saved.mediaItems.isEmpty()) throw NothingToPlayException("Saved queue could not be restored")
-            keepRestoredQueue(saved)
-            handleAudiobookShuffle(
-                mediaSession,
-                saved.mediaItems.any {
-                    it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
-                }
-            )
-            return saved
+            if (saved.mediaItems.isNotEmpty()) {
+                keepRestoredQueue(saved)
+                handleAudiobookShuffle(
+                    mediaSession,
+                    saved.mediaItems.any {
+                        it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
+                    }
+                )
+                return saved
+            }
+            // Nothing saved: a voice request still plays something (the library, shuffled).
+            if (voiceQuery == null) throw NothingToPlayException("Saved queue could not be restored")
         }
+
+        if (voiceQuery != null) return resolveVoiceRequest(mediaSession, voiceQuery, mediaItems[0])
 
         val queueTitle = queueTitleFor(mediaItems)
 
@@ -625,6 +634,46 @@ class DashTuneSessionCallback(
         )
         savePlaylist(resolvedItems, queueTitle)
         return mediaItemsWithStartPosition
+    }
+
+    /**
+     * A voice "play X": the best match for X, queued the way tapping it would queue it. A book
+     * picks up at its saved chapter and position.
+     */
+    private suspend fun resolveVoiceRequest(
+        mediaSession: MediaSession,
+        query: String,
+        request: MediaItem,
+    ): MediaSession.MediaItemsWithStartPosition {
+        Log.i(LOG_TAG, "Voice request")
+        val target = if (query.isBlank()) null else resolver.pickVoiceTarget(query, request.requestMetadata.extras)
+        val tracks = when {
+            query.isBlank() -> resolver.resolveVoiceSearch(query, null)
+            target != null -> resolver.queueForVoiceTarget(target)
+            else -> emptyList()
+        }
+        if (tracks.isEmpty()) throw NothingToPlayException("Nothing matched a voice request")
+
+        val isAudiobookContent = tracks.any { it.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true }
+        handleAudiobookShuffle(mediaSession, isAudiobookContent)
+
+        var startIndex = 0
+        var startPositionMs = C.TIME_UNSET
+        if (isAudiobookContent && target != null) {
+            try {
+                withTimeoutOrNull(3000) { getAudiobookResumePosition(target.mediaId, tracks) }?.let {
+                    startIndex = it.first
+                    startPositionMs = it.second
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to get audiobook resume position for a voice request", e)
+            }
+        }
+
+        savePlaylist(tracks, target?.mediaMetadata?.title?.toString())
+        return MediaSession.MediaItemsWithStartPosition(tracks, startIndex, startPositionMs)
     }
 
     /**

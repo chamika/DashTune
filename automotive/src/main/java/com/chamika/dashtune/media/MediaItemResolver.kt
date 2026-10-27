@@ -1,5 +1,7 @@
 package com.chamika.dashtune.media
 
+import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -24,12 +26,28 @@ class MediaItemResolver(
     companion object {
         /** Size of the "Shuffle new" queue and of the tail appended after a new album. */
         const val LATEST_TRACKS_LIMIT = 50
+
+        /**
+         * The spoken query when [mediaItems] is a voice "play X" request, which Media3 hands over
+         * as one item with no id and the query in its request metadata. Blank for "play
+         * DashTune" with nothing named. Null for anything else.
+         */
+        fun voiceQuery(mediaItems: List<MediaItem>): String? =
+            mediaItems.singleOrNull()?.takeIf { it.mediaId.isEmpty() }?.requestMetadata?.searchQuery
+
+        private fun isVoiceRequest(item: MediaItem): Boolean =
+            item.mediaId.isEmpty() && item.requestMetadata.searchQuery != null
     }
 
     suspend fun resolveMediaItems(mediaItems: List<MediaItem>): List<MediaItem> {
         val playlist = mutableListOf<MediaItem>()
 
         mediaItems.forEach {
+            if (isVoiceRequest(it)) {
+                playlist.addAll(resolveVoiceSearch(it.requestMetadata.searchQuery!!, it.requestMetadata.extras))
+                return@forEach
+            }
+
             // Home tiles resolve to whole queues rather than to a Jellyfin item, so they are
             // handled before the normal item lookup — there is nothing on the server to fetch.
             if (it.mediaId.startsWith(RADIO_ARTIST_PREFIX)) {
@@ -114,9 +132,64 @@ class MediaItemResolver(
         return albumTracks + continuation
     }
 
+    /**
+     * The queue for a voice request: the library shuffled when nothing was named, else the
+     * best match for what was said (see [pickVoiceTarget]) played the way a tap would play it.
+     */
+    suspend fun resolveVoiceSearch(query: String, extras: Bundle?): List<MediaItem> {
+        if (query.isBlank()) return repository.getLibraryShuffled()
+        val target = pickVoiceTarget(query, extras) ?: return emptyList()
+        return queueForVoiceTarget(target)
+    }
+
+    /** An artist plays its radio, a track carries on into a mix of it, a container plays in full. */
+    suspend fun queueForVoiceTarget(target: MediaItem): List<MediaItem> =
+        when (target.mediaMetadata.mediaType) {
+            MediaMetadata.MEDIA_TYPE_ARTIST -> repository.getArtistRadioTracks(target.mediaId)
+            MediaMetadata.MEDIA_TYPE_MUSIC -> listOf(target) +
+                repository.getSongMixTracks(target.mediaId).filterNot { it.mediaId == target.mediaId }
+            else -> resolveMediaItems(listOf(target))
+        }
+
+    /**
+     * What a voice query most likely meant. The assistant says what kind of thing was asked for
+     * ([MediaStore.EXTRA_MEDIA_FOCUS]) and the names it heard; without those the search, which
+     * lists artists first, would hand an artist back for "play Bohemian Rhapsody". An exact
+     * title match wins over a partial one, and for a song the artist that was heard breaks ties.
+     */
+    suspend fun pickVoiceTarget(query: String, extras: Bundle?): MediaItem? {
+        val (wantedType, heardName) = when (extras?.getString(MediaStore.EXTRA_MEDIA_FOCUS)) {
+            MediaStore.Audio.Artists.ENTRY_CONTENT_TYPE ->
+                MediaMetadata.MEDIA_TYPE_ARTIST to extras.getString(MediaStore.EXTRA_MEDIA_ARTIST)
+            MediaStore.Audio.Albums.ENTRY_CONTENT_TYPE ->
+                MediaMetadata.MEDIA_TYPE_ALBUM to extras.getString(MediaStore.EXTRA_MEDIA_ALBUM)
+            MediaStore.Audio.Media.ENTRY_CONTENT_TYPE ->
+                MediaMetadata.MEDIA_TYPE_MUSIC to extras.getString(MediaStore.EXTRA_MEDIA_TITLE)
+            MediaStore.Audio.Playlists.ENTRY_CONTENT_TYPE ->
+                MediaMetadata.MEDIA_TYPE_PLAYLIST to extras.getString(MediaStore.EXTRA_MEDIA_PLAYLIST)
+            else -> null to null
+        }
+        val term = heardName?.takeIf { it.isNotBlank() } ?: query
+        val hits = repository.search(term)
+        val candidates = hits.filter { it.mediaMetadata.mediaType == wantedType }.ifEmpty { hits }
+
+        val artist = extras?.getString(MediaStore.EXTRA_MEDIA_ARTIST)
+            ?.takeIf { it.isNotBlank() && wantedType != MediaMetadata.MEDIA_TYPE_ARTIST }
+        fun MediaItem.titled() = mediaMetadata.title?.toString().equals(term, ignoreCase = true)
+        fun MediaItem.by() = artist == null ||
+            mediaMetadata.albumArtist?.toString()?.contains(artist, ignoreCase = true) == true
+
+        return candidates.firstOrNull { it.titled() && it.by() }
+            ?: candidates.firstOrNull { it.titled() }
+            ?: candidates.firstOrNull { it.by() }
+            ?: candidates.firstOrNull()
+    }
+
     suspend fun isSingleItemWithParent(mediaItems: List<MediaItem>): Boolean {
         if (mediaItems.size != 1) return false
         val mediaId = mediaItems[0].mediaId
+        // A voice request has no id at all; resolveMediaItems turns its query into a queue.
+        if (mediaId.isEmpty()) return false
         // Home action tiles and prefixed albums have no Jellyfin item behind their id, so
         // there is no parent to expand — resolveMediaItems handles them itself.
         if (isHomeActionId(mediaId) || mediaId.startsWith(NEW_ALBUM_PREFIX)) return false

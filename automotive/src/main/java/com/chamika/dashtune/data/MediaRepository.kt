@@ -291,6 +291,18 @@ class MediaRepository(
     suspend fun getSavedQueue(): List<MediaItem> =
         dao.getChildrenByParent(SAVED_QUEUE).map { it.toMediaItem() }
 
+    /** Empty when the mix cannot be fetched: the song itself still plays. */
+    suspend fun getSongMixTracks(songId: String): List<MediaItem> {
+        return try {
+            withContext(Dispatchers.IO) { tree.getSongMixTracks(songId) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Song mix failed for $songId", e)
+            emptyList()
+        }
+    }
+
     suspend fun getArtistRadioTracks(artistId: String): List<MediaItem> {
         return try {
             withContext(Dispatchers.IO) { tree.getArtistRadioTracks(artistId) }

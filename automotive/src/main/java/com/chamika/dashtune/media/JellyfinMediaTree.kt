@@ -593,6 +593,14 @@ class JellyfinMediaTree(
         return tracks.toMediaItems("artist radio")
     }
 
+    /** An instant mix seeded from one song, for a track picked by voice to carry on from. */
+    suspend fun getSongMixTracks(songId: String): List<MediaItem> = retryOnFailure {
+        api.instantMixApi.getInstantMixFromSong(
+            itemId = songId.toUUID(),
+            limit = RADIO_MAX_ITEMS
+        ).content.items
+    }.toMediaItems("song mix")
+
     /**
      * The newest tracks in the music libraries, newest first. Backs both the "Shuffle new"
      * tile and the continuation appended after a recently added album.

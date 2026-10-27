@@ -123,6 +123,12 @@ automotive/src/main/java/com/chamika/dashtune/
 3. `JellyfinMediaTree` builds the browsable hierarchy from user-configured categories (Latest, Favourites, Books, Playlists, Random)
 4. `MediaItemFactory` converts Jellyfin `BaseItemDto` to Media3 `MediaItem` for artists, albums, playlists, tracks, and audiobooks
 5. `AlbumArtContentProvider` serves album art via `content://` URIs so the AAOS system UI can display them
+6. Voice "play X" (Assistant's `playFromSearch`) arrives as one item with an empty media id and
+   `requestMetadata.searchQuery` (`MediaItemResolver.voiceQuery`). `pickVoiceTarget` searches
+   using the assistant's `EXTRA_MEDIA_FOCUS`/`ARTIST`/`ALBUM`/`TITLE` extras (search lists
+   artists first, so the focus matters). An artist plays its radio, a track plays and then a
+   song instant mix, and an album, playlist or book plays in full; a book resumes. A blank
+   query restores the saved queue, else shuffles the library.
 
 ### Authentication
 - Android AccountManager stores server URL + access token
