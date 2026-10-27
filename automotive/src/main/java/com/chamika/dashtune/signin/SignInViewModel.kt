@@ -62,8 +62,9 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             if (response.status == 200) PingResult.Success else PingResult.Unreachable
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Error", e)
-            val host = try { java.net.URI(serverUrl).host ?: "unknown" } catch (_: Exception) { "invalid_url" }
-            FirebaseUtils.safeSetCustomKey("server_url_host", host)
+            // The scheme only: a self-hosted domain usually identifies the person running it.
+            val scheme = try { java.net.URI(serverUrl).scheme ?: "none" } catch (_: Exception) { "invalid_url" }
+            FirebaseUtils.safeSetCustomKey("server_url_scheme", scheme)
 
             // A rejected certificate is a state the user can resolve, so offer the prompt instead
             // of recording it as a crash. Only report it when we can't read the certificate back,
@@ -71,7 +72,7 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             if (isCertificateTrustFailure(e)) {
                 val certificate = certificateInspector.inspect(serverUrl)
                 if (certificate != null) {
-                    FirebaseUtils.safeLog("Untrusted certificate presented by $host")
+                    FirebaseUtils.safeLog("Untrusted certificate presented by the server")
                     return PingResult.UntrustedCertificate(certificate)
                 }
             }
@@ -186,7 +187,7 @@ class SignInViewModel @Inject constructor() : ViewModel() {
     }
 
     private fun loginSuccess(server: String, username: String, token: String) {
-        Log.i(LOG_TAG, "$username successfully authenticated")
+        Log.i(LOG_TAG, "Successfully authenticated")
         accountManager.storeAccount(server, username, token)
         _loggedIn.postValue(true)
     }

@@ -739,7 +739,6 @@ class DashTuneSessionCallback(
                 if (tokenRejected(e)) return@launchFuture signInRequired()
                 Log.e(LOG_TAG, "Failed to search for '$query'", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "search")
-                FirebaseUtils.safeSetCustomKey("search_query", query)
                 FirebaseUtils.safeRecordApiException(e)
                 LibraryResult.ofError(
                     SessionError(
@@ -771,7 +770,6 @@ class DashTuneSessionCallback(
                 if (tokenRejected(e)) return@launchFuture signInRequired()
                 Log.e(LOG_TAG, "Failed to get search results for '$query'", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "get_search_result")
-                FirebaseUtils.safeSetCustomKey("search_query", query)
                 FirebaseUtils.safeRecordApiException(e)
                 LibraryResult.ofError(
                     SessionError(
