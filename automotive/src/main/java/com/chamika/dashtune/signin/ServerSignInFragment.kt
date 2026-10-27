@@ -54,8 +54,14 @@ class ServerSignInFragment : Fragment() {
     }
 
     private fun connect(serverUrl: Editable) {
-        progressBar.visibility = View.VISIBLE
         errorText.visibility = View.GONE
+        // Asked before the ping: the shared client refuses plain http to a host not accepted
+        // yet, so the ping itself would fail.
+        viewModel.hostNeedingCleartextConsent(serverUrl.toString())?.let { host ->
+            promptForCleartext(host, serverUrl)
+            return
+        }
+        progressBar.visibility = View.VISIBLE
 
         viewLifecycleOwner.lifecycleScope.launch {
             when (val result = viewModel.pingServer(serverUrl.toString())) {
@@ -73,6 +79,21 @@ class ServerSignInFragment : Fragment() {
                 }
             }
         }
+    }
+
+    private fun promptForCleartext(host: String, serverUrl: Editable) {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.cleartext_title)
+            .setMessage(getString(R.string.cleartext_details, host))
+            .setPositiveButton(R.string.cleartext_continue) { _, _ ->
+                viewModel.allowCleartext(host)
+                connect(serverUrl)
+            }
+            .setNegativeButton(R.string.cancel) { _, _ ->
+                errorText.setText(R.string.cleartext_rejected)
+                errorText.visibility = View.VISIBLE
+            }
+            .show()
     }
 
     /**

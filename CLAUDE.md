@@ -135,6 +135,13 @@ automotive/src/main/java/com/chamika/dashtune/
 - Two auth methods: QuickConnect (polling) and username/password
 - `SignInActivity` → `ServerSignInFragment` (ping) → `CredentialsFragment` (auth)
 - On login success, sends `LOGIN_COMMAND` to service which updates API client and refreshes media tree
+- Plain http is allowed only to local hosts (private/link-local/CGNAT IPv4, ULA/link-local IPv6,
+  single-label names, `.local`/`.lan`/`.home.arpa`/`.internal`/`.ts.net`) or to a host the
+  user accepted in the "Connection not encrypted" dialog at sign-in (`tls.CleartextPolicy`).
+  `CleartextGuard` on the shared OkHttp client enforces it for API, art, streaming and
+  prefetch; the manifest still sets `usesCleartextTraffic`. The dialog comes before the ping,
+  which the guard would otherwise refuse. An http server already signed in before this policy
+  existed is allowed once at startup (`allowExistingServer`).
 
 ### Offline & Caching
 - ExoPlayer `CacheDataSource` wraps HTTP requests with disk cache (LRU eviction)

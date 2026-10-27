@@ -9,6 +9,7 @@ import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.FirebaseUtils
 import com.chamika.dashtune.auth.JellyfinAccountManager
 import com.chamika.dashtune.tls.CertificateInspector
+import com.chamika.dashtune.tls.CleartextPolicy
 import com.chamika.dashtune.tls.ServerCertificate
 import com.chamika.dashtune.tls.TrustedCertificateStore
 import com.chamika.dashtune.tls.isCertificateTrustFailure
@@ -41,6 +42,9 @@ class SignInViewModel @Inject constructor() : ViewModel() {
 
     @Inject
     lateinit var certificateInspector: CertificateInspector
+
+    @Inject
+    lateinit var cleartextPolicy: CleartextPolicy
 
     private var quickConnectSecret: String = ""
 
@@ -80,6 +84,18 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             FirebaseUtils.safeRecordException(e)
             PingResult.Unreachable
         }
+    }
+
+    /**
+     * The host to warn about before connecting to [serverUrl] over plain http, or null when it
+     * is https or on the local network. Every request would carry the token unencrypted.
+     */
+    fun hostNeedingCleartextConsent(serverUrl: String): String? = cleartextPolicy.hostNeedingConsent(serverUrl)
+
+    /** The user accepted sending their sign-in to [host] unencrypted. */
+    fun allowCleartext(host: String) {
+        FirebaseUtils.safeLog("User allowed an unencrypted server")
+        cleartextPolicy.allow(host)
     }
 
     /** Accept [certificate] for its host, so every later connection to it succeeds. */
