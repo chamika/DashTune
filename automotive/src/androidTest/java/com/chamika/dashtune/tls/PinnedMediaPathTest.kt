@@ -72,7 +72,7 @@ class PinnedMediaPathTest {
     }
 
     private fun openMediaDataSource(): Long {
-        val client = DashTuneModule().provideOkHttpClient(store)
+        val client = DashTuneModule().provideOkHttpClient(store, CleartextPolicy(context))
         val dataSource = OkHttpDataSource.Factory(client).createDataSource()
         return dataSource.open(DataSpec(Uri.parse(url)))
     }
