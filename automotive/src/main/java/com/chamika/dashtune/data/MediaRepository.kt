@@ -141,7 +141,13 @@ class MediaRepository(
         }
     }
 
-    suspend fun getChildren(parentId: String): List<MediaItem> {
+    /**
+     * Children from the cache, else from the server. A parent that is not cached and cannot be
+     * fetched comes back empty, which playback relies on (a single-file audiobook has no
+     * children). Browsing passes [failOnError] instead, so the head unit shows "unavailable"
+     * with a Retry rather than an empty page that reads as "nothing here".
+     */
+    suspend fun getChildren(parentId: String, failOnError: Boolean = false): List<MediaItem> {
         if (parentId == ROOT_ID) {
             return tree.getChildren(ROOT_ID)
         }
@@ -172,23 +178,26 @@ class MediaRepository(
             }
         }
 
-        return fetch.await()
+        return try {
+            fetch.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to fetch children for $parentId from network", e)
+            if (failOnError) throw e
+            emptyList()
+        }
     }
 
     private suspend fun fetchAndCacheChildren(parentId: String): List<MediaItem> {
-        return try {
-            val children = tree.getChildren(parentId)
-            if (children.isNotEmpty()) {
-                val entities = children.mapIndexed { index, item ->
-                    item.toEntity(parentId, index)
-                }
-                dao.replaceChildren(mapOf(parentId to entities))
+        val children = tree.getChildren(parentId)
+        if (children.isNotEmpty()) {
+            val entities = children.mapIndexed { index, item ->
+                item.toEntity(parentId, index)
             }
-            children
-        } catch (e: Exception) {
-            Log.w(LOG_TAG, "Failed to fetch children for $parentId from network", e)
-            emptyList()
+            dao.replaceChildren(mapOf(parentId to entities))
         }
+        return children
     }
 
     /**

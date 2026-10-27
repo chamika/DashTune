@@ -251,7 +251,7 @@ class DashTuneSessionCallback(
         return SuspendToFutureAdapter.launchFuture {
             try {
                 val children = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
-                    repository.getChildren(parentId)
+                    repository.getChildren(parentId, failOnError = true)
                 } ?: throw java.util.concurrent.TimeoutException("Browse timed out after ${BROWSE_TIMEOUT_MS}ms")
                 // A 401 is swallowed by the cache fallback and by Home's sections; the tree
                 // reported it, so offer sign-in rather than an empty or local-only list.

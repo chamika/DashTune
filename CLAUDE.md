@@ -156,6 +156,9 @@ automotive/src/main/java/com/chamika/dashtune/
   request timeout covers the whole body, so one response for a long playlist never finished.
   The Artists/Albums letter buckets, Genres, a genre's albums, Playlists and Books page the same
   way, so a large library is never cut off; only Latest and Random stay capped at 120.
+- A browse of a parent that is neither cached nor fetchable fails (`getChildren(failOnError =
+  true)`), so the head unit shows "Library unavailable" with Retry, not an empty page. Other
+  callers still get an empty list: playback treats "no children" as a single-file audiobook.
 - `retryOnFailure` retries refused connections and DNS failures (searching the whole cause chain,
   since the SDK wraps them), not requests that already sat through the read timeout.
 - **Never make an SDK call from the main thread.** The SDK awaits the call, then reads the response

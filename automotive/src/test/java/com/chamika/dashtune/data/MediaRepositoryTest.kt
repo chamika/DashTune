@@ -522,6 +522,16 @@ class MediaRepositoryTest {
         assertEquals(0, result.size)
     }
 
+    @Test
+    fun `a browse of an uncached parent that cannot be fetched fails instead of coming back empty`() = runTest {
+        coEvery { dao.getChildrenByParent("album-offline") } returns emptyList()
+        coEvery { tree.getChildren("album-offline") } throws RuntimeException("Network unavailable")
+
+        val failure = runCatching { repository.getChildren("album-offline", failOnError = true) }
+
+        assertEquals("Network unavailable", failure.exceptionOrNull()?.message)
+    }
+
     // --- getShuffledTracks tests ---
 
     @Test
