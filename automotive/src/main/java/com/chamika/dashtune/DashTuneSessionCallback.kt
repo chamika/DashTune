@@ -31,6 +31,7 @@ import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RESUME_QUEUE
@@ -900,6 +901,7 @@ class DashTuneSessionCallback(
             return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
         }
         Log.i(LOG_TAG, "onSetRating ${rating.isHeart}")
+        ensureTreeInitialized()
 
         val item = session.player.currentMediaItem
         item?.let {
@@ -911,6 +913,13 @@ class DashTuneSessionCallback(
         return SuspendToFutureAdapter.launchFuture {
             try {
                 applyRating(mediaId, rating)
+                val favourites = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
+                    repository.refreshFavourites()
+                }
+                if (favourites != null) {
+                    (session as? MediaLibraryService.MediaLibrarySession)
+                        ?.notifyChildrenChanged(FAVOURITES, favourites.size, null)
+                }
                 SessionResult(SessionResult.RESULT_SUCCESS)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to set rating for $mediaId", e)
