@@ -15,6 +15,9 @@
         android:name="android.permission.MANAGE_ACCOUNTS"
         android:maxSdkVersion="22" />
 
+    <!-- usesCleartextTraffic stays on for servers on the local network: the platform policy
+         cannot tell those apart. tls.CleartextGuard refuses http to any other host the user
+         did not accept at sign-in. -->
     <application
         android:name=".DashTuneApplication"
         android:allowBackup="false"

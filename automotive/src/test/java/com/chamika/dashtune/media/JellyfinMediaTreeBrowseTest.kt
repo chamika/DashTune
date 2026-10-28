@@ -9,10 +9,12 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ARTISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTERS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import org.jellyfin.sdk.api.client.exception.InvalidStatusException
 import kotlinx.coroutines.test.runTest
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.Response
@@ -152,7 +154,8 @@ class JellyfinMediaTreeBrowseTest {
                 nameLessThan = null,
                 sortBy = listOf(ItemSortBy.SORT_NAME),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = MAX_ITEMS
+                startIndex = 0,
+                limit = CHILDREN_PAGE_SIZE
             )
         } returns result(dto(BaseItemKind.MUSIC_ARTIST, "Beach House"))
 
@@ -169,7 +172,8 @@ class JellyfinMediaTreeBrowseTest {
                 nameLessThan = "A",
                 sortBy = listOf(ItemSortBy.SORT_NAME),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = MAX_ITEMS
+                startIndex = 0,
+                limit = CHILDREN_PAGE_SIZE
             )
         } returns result(dto(BaseItemKind.MUSIC_ARTIST, "65daysofstatic"))
 
@@ -188,13 +192,70 @@ class JellyfinMediaTreeBrowseTest {
                 nameLessThan = null,
                 sortBy = listOf(ItemSortBy.SORT_NAME),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = MAX_ITEMS
+                startIndex = 0,
+                limit = CHILDREN_PAGE_SIZE
             )
         } returns result(dto(BaseItemKind.MUSIC_ALBUM, "Currents"))
 
         val children = tree.getChildren(MediaItemFactory.letterBucketId(ALBUMS, "C"))
 
         assertEquals(listOf("Currents"), children.map { it.mediaMetadata.title.toString() })
+    }
+
+    @Test
+    fun `a letter with more artists than one page lists all of them`() = runTest {
+        val artists = List(CHILDREN_PAGE_SIZE + 30) { dto(BaseItemKind.MUSIC_ARTIST, "S$it") }
+        for (start in listOf(0, CHILDREN_PAGE_SIZE)) {
+            coEvery {
+                artistsApi.getAlbumArtists(
+                    nameStartsWith = "S",
+                    nameLessThan = null,
+                    sortBy = listOf(ItemSortBy.SORT_NAME),
+                    sortOrder = listOf(SortOrder.ASCENDING),
+                    startIndex = start,
+                    limit = CHILDREN_PAGE_SIZE
+                )
+            } returns Response(
+                content = BaseItemDtoQueryResult(
+                    items = artists.drop(start).take(CHILDREN_PAGE_SIZE),
+                    totalRecordCount = artists.size,
+                    startIndex = start
+                ),
+                status = 200,
+                headers = emptyMap()
+            )
+        }
+
+        val children = tree.getChildren(MediaItemFactory.letterBucketId(ARTISTS, "S"))
+
+        assertEquals(artists.size, children.size)
+    }
+
+    @Test
+    fun `playlists past the first page are all listed`() = runTest {
+        val playlists = List(CHILDREN_PAGE_SIZE + 5) { dto(BaseItemKind.PLAYLIST, "Mix $it") }
+        for (start in listOf(0, CHILDREN_PAGE_SIZE)) {
+            coEvery {
+                itemsApi.getItems(
+                    includeItemTypes = listOf(BaseItemKind.PLAYLIST),
+                    recursive = true,
+                    sortOrder = listOf(SortOrder.DESCENDING),
+                    sortBy = listOf(ItemSortBy.DATE_CREATED),
+                    startIndex = start,
+                    limit = CHILDREN_PAGE_SIZE
+                )
+            } returns Response(
+                content = BaseItemDtoQueryResult(
+                    items = playlists.drop(start).take(CHILDREN_PAGE_SIZE),
+                    totalRecordCount = playlists.size,
+                    startIndex = start
+                ),
+                status = 200,
+                headers = emptyMap()
+            )
+        }
+
+        assertEquals(playlists.size, tree.getChildren(PLAYLISTS).size)
     }
 
     @Test
@@ -211,7 +272,8 @@ class JellyfinMediaTreeBrowseTest {
                 includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
                 sortBy = listOf(ItemSortBy.SORT_NAME),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = MAX_ITEMS
+                startIndex = 0,
+                limit = CHILDREN_PAGE_SIZE
             )
         } returns result(
             dto(BaseItemKind.MUSIC_GENRE, "Ambient"),
@@ -232,7 +294,8 @@ class JellyfinMediaTreeBrowseTest {
                 includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
                 sortBy = listOf(ItemSortBy.SORT_NAME),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = MAX_ITEMS
+                startIndex = 0,
+                limit = CHILDREN_PAGE_SIZE
             )
         } returns result(genre)
         coEvery {
@@ -242,7 +305,8 @@ class JellyfinMediaTreeBrowseTest {
                 genreIds = listOf(genre.id),
                 sortBy = listOf(ItemSortBy.SORT_NAME),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = MAX_ITEMS
+                startIndex = 0,
+                limit = CHILDREN_PAGE_SIZE
             )
         } returns result(dto(BaseItemKind.MUSIC_ALBUM, "Nevermind"))
 
@@ -264,7 +328,8 @@ class JellyfinMediaTreeBrowseTest {
                 includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
                 sortBy = listOf(ItemSortBy.SORT_NAME),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = MAX_ITEMS
+                startIndex = 0,
+                limit = CHILDREN_PAGE_SIZE
             )
         } returns result(genre)
         coEvery {
@@ -274,7 +339,8 @@ class JellyfinMediaTreeBrowseTest {
                 genreIds = listOf(genre.id),
                 sortBy = listOf(ItemSortBy.SORT_NAME),
                 sortOrder = listOf(SortOrder.ASCENDING),
-                limit = MAX_ITEMS
+                startIndex = 0,
+                limit = CHILDREN_PAGE_SIZE
             )
         } returns result()
 
@@ -317,5 +383,39 @@ class JellyfinMediaTreeBrowseTest {
         assertEquals(ARTISTS, tree.getItem(ARTISTS).mediaId)
         assertEquals(ALBUMS, tree.getItem(ALBUMS).mediaId)
         assertEquals(GENRES, tree.getItem(GENRES).mediaId)
+    }
+
+    // --- Search ---
+
+    @Test
+    fun `search shows the kinds that answered when another kind fails`() = runTest {
+        coEvery { artistsApi.getAlbumArtists(searchTerm = "nev", limit = 10) } throws InvalidStatusException(500)
+        coEvery {
+            itemsApi.getItems(
+                recursive = true,
+                searchTerm = "nev",
+                includeItemTypes = listOf(BaseItemKind.MUSIC_ALBUM),
+                limit = 10
+            )
+        } returns result(dto(BaseItemKind.MUSIC_ALBUM, "Nevermind"))
+        coEvery {
+            itemsApi.getItems(recursive = true, searchTerm = "nev", includeItemTypes = neq(listOf(BaseItemKind.MUSIC_ALBUM)), limit = any())
+        } returns result()
+
+        val results = tree.search("nev")
+
+        assertEquals(listOf("Nevermind"), results.map { it.mediaMetadata.title.toString() })
+    }
+
+    @Test
+    fun `search fails only when every kind failed`() = runTest {
+        coEvery { artistsApi.getAlbumArtists(searchTerm = "x", limit = 10) } throws InvalidStatusException(500)
+        coEvery {
+            itemsApi.getItems(recursive = true, searchTerm = "x", includeItemTypes = any(), limit = any())
+        } throws InvalidStatusException(500)
+
+        val failure = runCatching { tree.search("x") }.exceptionOrNull()
+
+        assertTrue(failure is InvalidStatusException)
     }
 }

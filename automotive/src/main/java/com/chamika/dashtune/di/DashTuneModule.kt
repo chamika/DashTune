@@ -4,6 +4,8 @@ import android.accounts.AccountManager
 import android.content.Context
 import com.chamika.dashtune.R
 import com.chamika.dashtune.auth.JellyfinAccountManager
+import com.chamika.dashtune.tls.CleartextGuard
+import com.chamika.dashtune.tls.CleartextPolicy
 import com.chamika.dashtune.tls.PinnedHostnameVerifier
 import com.chamika.dashtune.tls.PinnedTrustManager
 import com.chamika.dashtune.tls.TrustedCertificateStore
@@ -32,7 +34,7 @@ class DashTuneModule {
      */
     @Provides
     @Singleton
-    fun provideOkHttpClient(store: TrustedCertificateStore): OkHttpClient {
+    fun provideOkHttpClient(store: TrustedCertificateStore, cleartextPolicy: CleartextPolicy): OkHttpClient {
         val trustManager = PinnedTrustManager(PinnedTrustManager.platformTrustManager(), store)
         val sslContext = SSLContext.getInstance("TLS").apply {
             init(null, arrayOf(trustManager), null)
@@ -41,6 +43,7 @@ class DashTuneModule {
         return OkHttpClient.Builder()
             .sslSocketFactory(sslContext.socketFactory, trustManager)
             .hostnameVerifier(PinnedHostnameVerifier(store))
+            .addInterceptor(CleartextGuard(cleartextPolicy))
             .build()
     }
 

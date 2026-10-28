@@ -4,6 +4,7 @@ import android.accounts.AccountManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -13,7 +14,6 @@ import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.OptIn
-import androidx.concurrent.futures.SuspendToFutureAdapter
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
@@ -23,6 +23,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.NoOpCacheEvictor
@@ -50,20 +51,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.HttpClientOptions
 import org.jellyfin.sdk.api.client.extensions.itemsApi
-import org.jellyfin.sdk.api.client.extensions.playStateApi
 import org.jellyfin.sdk.api.client.extensions.universalAudioApi
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ItemFilter
-import org.jellyfin.sdk.model.api.PlaybackStartInfo
-import org.jellyfin.sdk.model.api.PlaybackOrder
-import org.jellyfin.sdk.model.api.PlaybackStopInfo
-import org.jellyfin.sdk.model.api.PlayMethod
-import org.jellyfin.sdk.model.api.RepeatMode
 import org.jellyfin.sdk.model.api.UpdateUserItemDataDto
 import org.jellyfin.sdk.model.serializer.toUUID
 import kotlin.time.Duration.Companion.seconds
@@ -133,6 +127,16 @@ class DashTuneMusicService : MediaLibraryService() {
         internal const val MAX_AUDIO_TRACK_INIT_RETRIES = 1
         internal const val AUDIO_TRACK_INIT_RETRY_DELAY_MS = 2_000L
 
+        /** Audio modes in which a call (or its ringing) owns the audio, not a stuck focus stack. */
+        internal fun isCallInProgress(audioMode: Int): Boolean = audioMode in setOf(
+            AudioManager.MODE_RINGTONE,
+            AudioManager.MODE_IN_CALL,
+            AudioManager.MODE_IN_COMMUNICATION,
+            AudioManager.MODE_CALL_SCREENING,
+            AudioManager.MODE_CALL_REDIRECT,
+            AudioManager.MODE_COMMUNICATION_REDIRECT,
+        )
+
         internal fun isAudioTrackInitError(errorCode: Int): Boolean =
             errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED
 
@@ -163,6 +167,23 @@ class DashTuneMusicService : MediaLibraryService() {
          */
         @Volatile
         private var lastExitHandled = false
+
+        /**
+         * Favourites share the LRU cache with streaming, so a download the index still calls
+         * COMPLETED may have been evicted since. It only counts if its bytes are still there,
+         * under the track-id key playback reads (older downloads were keyed by URL).
+         */
+        internal fun isStillQueuedOrCached(download: Download, cache: Cache): Boolean =
+            when (download.state) {
+                Download.STATE_DOWNLOADING, Download.STATE_QUEUED -> true
+                Download.STATE_COMPLETED -> {
+                    val key = download.request.customCacheKey
+                    val length = download.contentLength.takeIf { it != C.LENGTH_UNSET.toLong() }
+                        ?: download.bytesDownloaded
+                    key == download.request.id && length > 0 && cache.isCached(key, 0, length)
+                }
+                else -> false
+            }
 
         /** Converts a playback position in milliseconds to Jellyfin's 100-ns tick units. */
         internal fun msToTicks(positionMs: Long): Long = positionMs * MILLISECONDS_TO_TICKS
@@ -211,12 +232,15 @@ class DashTuneMusicService : MediaLibraryService() {
     private lateinit var callback: DashTuneSessionCallback
 
     private val handler: Handler = Handler(Looper.getMainLooper())
+    private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
     private var currentPlaybackTime: Long = 0
     private var currentTrack: MediaItem? = null
     private var isPlayingAudiobook: Boolean = false
 
     private lateinit var playbackPoll: Runnable
     private lateinit var audiobookPositionReporter: Runnable
+    private lateinit var progressReport: Runnable
+    private lateinit var reporter: PlaybackReporter
     private lateinit var playerListener: Player.Listener
     private lateinit var focusRecovery: Runnable
     private lateinit var networkErrorRetry: Runnable
@@ -231,6 +255,13 @@ class DashTuneMusicService : MediaLibraryService() {
 
     private lateinit var networkSync: NetworkSyncScheduler
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /**
+     * Reports to the server outlive the service on purpose: the save sent as playback pauses is
+     * often launched moments before onDestroy (swiping the app away pauses, then stops it), and
+     * cancelling it there lost the last position. Each call is bounded by the SDK timeouts.
+     */
+    private val reportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == "browse_categories") {
@@ -264,6 +295,16 @@ class DashTuneMusicService : MediaLibraryService() {
                 requestTimeout = 7.seconds,
                 socketTimeout = 7.seconds,
             )
+        )
+
+        reporter = PlaybackReporter(
+            api = jellyfinApi,
+            prefs = PreferenceManager.getDefaultSharedPreferences(this),
+            scope = reportScope,
+            isTranscoding = {
+                PreferenceManager.getDefaultSharedPreferences(this)
+                    .getString("bitrate", "Direct stream") != "Direct stream"
+            },
         )
 
         // Setup offline cache
@@ -342,6 +383,16 @@ class DashTuneMusicService : MediaLibraryService() {
                 FirebaseUtils.safeSetCustomKey("failed_track_id", failedId ?: "")
                 FirebaseUtils.safeRecordException(error)
 
+                if (ApiErrors.isUnauthorizedStream(error)) {
+                    // Every other track would be refused the same way, so skipping on would
+                    // walk the queue and stop with no sign-in offered. Leave the error showing
+                    // and the queue in place, and let the callback check the token.
+                    Log.w(LOG_TAG, "Stream refused with 401; checking the token")
+                    FirebaseUtils.safeLog("Stream refused with 401; checking the token")
+                    callback.onStreamUnauthorized(mediaLibrarySession)
+                    return
+                }
+
                 if (isAudioTrackInitError(error.errorCode) &&
                     audioTrackInitRetries < MAX_AUDIO_TRACK_INIT_RETRIES
                 ) {
@@ -398,7 +449,12 @@ class DashTuneMusicService : MediaLibraryService() {
                         putInt(PLAYLIST_INDEX_PREF, player.currentMediaItemIndex)
                     }
 
-                    SuspendToFutureAdapter.launchFuture { reportPlayback(player) }
+                    // The old track's session ends where the poll last saw it; the new one
+                    // starts now if it is meant to play (a queue restored paused waits).
+                    reporter.stopped(currentPlaybackTime)
+                    val started = player.currentMediaItem?.mediaId
+                    if (started != null && player.playWhenReady) reporter.started(started)
+                    logFormat(player)
 
                     // Prefetch next tracks
                     val prefetchCount = PreferenceManager
@@ -421,10 +477,10 @@ class DashTuneMusicService : MediaLibraryService() {
                         networkErrorRetries = 0
                         audioTrackInitRetries = 0
                         consecutiveErrorSkips = 0
-                        startPlaybackPoll()
-                        if (isPlayingAudiobook && player.currentMediaItem != null) {
-                            reportAudiobookStart(player)
+                        player.currentMediaItem?.mediaId?.let {
+                            if (reporter.openItemId != it) reporter.started(it)
                         }
+                        startPlaybackPoll()
                     } else {
                         stopPlaybackPoll()
                         // Save audiobook position — reportAudiobookStopped uses currentTrack
@@ -438,6 +494,15 @@ class DashTuneMusicService : MediaLibraryService() {
                         val listenStopped = !player.playWhenReady ||
                                 player.playbackState == Player.STATE_ENDED
                         if (listenStopped && ::callback.isInitialized) callback.invalidateHome()
+                        // A pause keeps the session open (Stopped would end it); the end of the
+                        // queue closes it.
+                        if (player.playbackState == Player.STATE_ENDED) {
+                            reporter.stopped(player.currentPosition)
+                        } else if (!player.playWhenReady) {
+                            player.currentMediaItem?.mediaId?.let {
+                                reporter.progress(it, player.currentPosition, isPaused = true)
+                            }
+                        }
                     }
                 }
 
@@ -491,6 +556,15 @@ class DashTuneMusicService : MediaLibraryService() {
             }
         }
 
+        progressReport = Runnable {
+            val p = mediaLibrarySession.player
+            val id = p.currentMediaItem?.mediaId
+            if (p.isPlaying && id != null) {
+                reporter.progress(id, p.currentPosition, isPaused = false)
+                handler.postDelayed(progressReport, PlaybackReporter.PROGRESS_INTERVAL_MS)
+            }
+        }
+
         audiobookPositionReporter = Runnable {
             val p = mediaLibrarySession.player
             if (shouldScheduleReporter(p.isPlaying, isPlayingAudiobook)) {
@@ -508,10 +582,16 @@ class DashTuneMusicService : MediaLibraryService() {
             if (p.playWhenReady &&
                 p.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS
             ) {
+                // A call holds focus legitimately, and asking during it gives our focus up for
+                // a refusal: no GAIN would follow when it ends. Look again later instead.
+                if (isCallInProgress(audioManager.mode)) {
+                    Log.i(LOG_TAG, "Transient focus loss during a call; checking again later")
+                    handler.postDelayed(focusRecovery, FOCUS_RECOVERY_DELAY_MS)
+                    return@Runnable
+                }
                 Log.w(LOG_TAG, "Audio focus stuck in transient loss; re-requesting focus")
                 FirebaseUtils.safeLog("Audio focus recovery: re-requesting focus")
-                p.playWhenReady = false
-                p.playWhenReady = true
+                focusDenialRetry.recoverFocus()
             }
         }
 
@@ -592,6 +672,8 @@ class DashTuneMusicService : MediaLibraryService() {
                 // runs on a ConnectivityManager thread; the session must be told on main.
                 handler.post { if (::callback.isInitialized) callback.invalidateHome() }
                 handler.post { networkSync.onAvailable(network) }
+                // Stopped reports kept while offline: the plays still count.
+                handler.post { reporter.flushPending() }
             }
 
             // Sync waits for a validated network; see NetworkSyncScheduler.
@@ -638,6 +720,8 @@ class DashTuneMusicService : MediaLibraryService() {
     private fun startPlaybackPoll() {
         handler.removeCallbacks(playbackPoll)
         handler.post(playbackPoll)
+        handler.removeCallbacks(progressReport)
+        handler.postDelayed(progressReport, PlaybackReporter.PROGRESS_INTERVAL_MS)
         if (isPlayingAudiobook) {
             handler.removeCallbacks(audiobookPositionReporter)
             handler.postDelayed(audiobookPositionReporter, AUDIOBOOK_POSITION_REPORT_INTERVAL_MS)
@@ -646,6 +730,7 @@ class DashTuneMusicService : MediaLibraryService() {
 
     private fun stopPlaybackPoll() {
         handler.removeCallbacks(playbackPoll)
+        handler.removeCallbacks(progressReport)
         handler.removeCallbacks(audiobookPositionReporter)
     }
 
@@ -690,6 +775,12 @@ class DashTuneMusicService : MediaLibraryService() {
         Log.i(LOG_TAG, "onDestroy")
         FirebaseUtils.safeLog("Service destroyed")
 
+        // Destroyed mid-book without a pause first: save where it got to before the player goes.
+        if (mediaLibrarySession.player.isPlaying) reportAudiobookStopped(mediaLibrarySession.player)
+        // Stopping the service ends whatever session is open; reporter's scope survives this.
+        reporter.stopped(
+            if (mediaLibrarySession.player.isPlaying) mediaLibrarySession.player.currentPosition else currentPlaybackTime
+        )
         mediaLibrarySession.release()
         mediaLibrarySession.player.removeListener(playerListener)
         mediaLibrarySession.player.removeListener(focusDenialRetry)
@@ -697,6 +788,7 @@ class DashTuneMusicService : MediaLibraryService() {
         mediaLibrarySession.player.release()
         handler.removeCallbacks(playbackPoll)
         handler.removeCallbacks(audiobookPositionReporter)
+        handler.removeCallbacks(progressReport)
         handler.removeCallbacks(focusRecovery)
         handler.removeCallbacks(networkErrorRetry)
         handler.removeCallbacks(audioTrackRetry)
@@ -791,7 +883,9 @@ class DashTuneMusicService : MediaLibraryService() {
             val id = mediaItem.mediaId
 
             try {
-                val downloadRequest = DownloadRequest.Builder(id, uri).build()
+                val downloadRequest = DownloadRequest.Builder(id, uri)
+                    .setCustomCacheKey(mediaItem.localConfiguration?.customCacheKey ?: id)
+                    .build()
                 downloadManager.addDownload(downloadRequest)
                 downloadManager.resumeDownloads()
             } catch (e: Exception) {
@@ -824,14 +918,7 @@ class DashTuneMusicService : MediaLibraryService() {
                     try {
                         val id = item.id.toString()
                         val existing = downloadManager.downloadIndex.getDownload(id)
-                        if (existing != null && existing.state in listOf(
-                                Download.STATE_COMPLETED,
-                                Download.STATE_DOWNLOADING,
-                                Download.STATE_QUEUED
-                            )
-                        ) {
-                            continue
-                        }
+                        if (existing != null && isStillQueuedOrCached(existing, downloadCache)) continue
                         val streamUrl = jellyfinApi.universalAudioApi.getUniversalAudioStreamUrl(
                             item.id,
                             container = allowedContainers,
@@ -843,7 +930,7 @@ class DashTuneMusicService : MediaLibraryService() {
                         val downloadRequest = DownloadRequest.Builder(
                             item.id.toString(),
                             streamUrl.toUri()
-                        ).build()
+                        ).setCustomCacheKey(id).build()
                         downloadManager.addDownload(downloadRequest)
                         queued++
                     } catch (e: Exception) {
@@ -872,7 +959,7 @@ class DashTuneMusicService : MediaLibraryService() {
         val positionMs = if (currentTrack != null) currentPlaybackTime else player.currentPosition
         val ticks = msToTicks(positionMs)
         Log.i(LOG_TAG, "Audiobook stopped: $mediaId at ${positionMs}ms")
-        serviceScope.launch(Dispatchers.IO) {
+        reportScope.launch {
             try {
                 jellyfinApi.itemsApi.updateItemUserData(
                     itemId = mediaId.toUUID(),
@@ -892,7 +979,7 @@ class DashTuneMusicService : MediaLibraryService() {
         val positionMs = currentPlaybackTime
         val ticks = msToTicks(positionMs)
         Log.d(LOG_TAG, "Audiobook progress: ${track.mediaId} at ${positionMs}ms")
-        serviceScope.launch(Dispatchers.IO) {
+        reportScope.launch {
             try {
                 jellyfinApi.itemsApi.updateItemUserData(
                     itemId = track.mediaId.toUUID(),
@@ -904,71 +991,9 @@ class DashTuneMusicService : MediaLibraryService() {
         }
     }
 
-    private fun reportAudiobookStart(player: Player) {
-        val mediaId = player.currentMediaItem?.mediaId ?: return
-        Log.i(LOG_TAG, "Audiobook started: $mediaId")
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                jellyfinApi.playStateApi.reportPlaybackStart(
-                    PlaybackStartInfo(
-                        itemId = mediaId.toUUID(),
-                        canSeek = true,
-                        isPaused = false,
-                        isMuted = false,
-                        playMethod = PlayMethod.DIRECT_PLAY,
-                        repeatMode = RepeatMode.REPEAT_NONE,
-                        playbackOrder = PlaybackOrder.DEFAULT
-                    )
-                )
-            } catch (e: Exception) {
-                Log.w(LOG_TAG, "Failed to report audiobook start", e)
-            }
-        }
-    }
-
-    private suspend fun reportPlayback(player: Player) {
-        // Player state is read here, on main; the reports go out on IO, because the SDK
-        // reads each response body on whichever thread resumes it.
-        val stoppedId = currentTrack?.mediaId
-        val stoppedPositionMs = currentPlaybackTime
-        val startedId = player.currentMediaItem?.mediaId
-        if (startedId != null) {
-            val exoPlayer = player as ExoPlayer
-            val format = exoPlayer.audioFormat
-            val formatString = "${format?.containerMimeType} at ${format?.averageBitrate} bps"
-
-            Log.i(
-                LOG_TAG,
-                "Playing $formatString: ${exoPlayer.currentMediaItem?.localConfiguration?.uri}"
-            )
-        }
-
-        withContext(Dispatchers.IO) {
-            if (stoppedId != null) {
-                Log.i(LOG_TAG, "Reporting playback stopped: $stoppedPositionMs")
-                jellyfinApi.playStateApi.reportPlaybackStopped(
-                    PlaybackStopInfo(
-                        itemId = stoppedId.toUUID(),
-                        positionTicks = MILLISECONDS_TO_TICKS * stoppedPositionMs,
-                        failed = false
-                    )
-                )
-            }
-
-            if (startedId != null) {
-                jellyfinApi.playStateApi.reportPlaybackStart(
-                    PlaybackStartInfo(
-                        itemId = startedId.toUUID(),
-                        canSeek = true,
-                        isPaused = false,
-                        isMuted = false,
-                        playMethod = PlayMethod.DIRECT_PLAY,
-                        repeatMode = RepeatMode.REPEAT_NONE,
-                        playbackOrder = PlaybackOrder.DEFAULT
-                    )
-                )
-            }
-        }
+    private fun logFormat(player: Player) {
+        val format = (player as ExoPlayer).audioFormat
+        Log.i(LOG_TAG, "Playing ${format?.containerMimeType} at ${format?.averageBitrate} bps")
     }
 
     private val downloadListener = object : DownloadManager.Listener {

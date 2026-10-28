@@ -68,6 +68,10 @@
     <string name="force_exit_summary">Stops playback and shuts down DashTune. Reopen it from the media apps list.</string>
     <string name="force_exit_confirmation">Force exit DashTune? Playback stops and the app closes. Reopen it from the media apps list.</string>
     <string name="force_exit_confirm">Force exit</string>
+    <string name="cleartext_title">Connection not encrypted</string>
+    <string name="cleartext_details">%1$s uses http, not https.\n\nYour sign-in and the token that keeps you signed in would travel unencrypted, and anyone on the same network (a hotspot, a mobile network) could read them.\n\nUse https if your server supports it. Continue only if you trust every network this car connects through.</string>
+    <string name="cleartext_continue">Continue unencrypted</string>
+    <string name="cleartext_rejected">Connection cancelled. Use an https address for this server.</string>
     <string name="untrusted_certificate_title">Certificate not trusted</string>
     <string name="untrusted_certificate_details">Android does not trust the certificate for %1$s.\n\nIssued by: %2$s\nExpires: %3$s\n\nSHA-256 fingerprint:\n%4$s\n\nOnly continue if this fingerprint matches your server. Trusting the wrong certificate lets someone intercept your login and music.</string>
     <string name="untrusted_certificate_trust">Trust this certificate</string>

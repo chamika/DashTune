@@ -4,7 +4,14 @@ import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
+import android.media.AudioManager
+import android.net.Uri
+import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadRequest
+import io.mockk.every
+import io.mockk.mockk
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import org.junit.Assert.assertEquals
@@ -313,5 +320,59 @@ class DashTuneMusicServiceTest {
     @Test
     fun `without an exit record nothing is restored`() {
         assertFalse(DashTuneMusicService.shouldRestoreQueueAfterExit(null, playingMomentsAgo, now))
+    }
+
+    // --- Favourites cache ---
+
+    private fun download(state: Int, cacheKey: String?, length: Long = 1_000L) = Download(
+        DownloadRequest.Builder("track-1", Uri.parse("https://jf.example/Audio/track-1/universal"))
+            .setCustomCacheKey(cacheKey)
+            .build(),
+        state,
+        /* startTimeMs= */ 0L,
+        /* updateTimeMs= */ 0L,
+        /* contentLength= */ length,
+        Download.STOP_REASON_NONE,
+        if (state == Download.STATE_FAILED) Download.FAILURE_REASON_UNKNOWN else Download.FAILURE_REASON_NONE,
+    )
+
+    @Test
+    fun `a completed favourite whose bytes were evicted is downloaded again`() {
+        val cache = mockk<Cache> { every { isCached("track-1", 0, 1_000L) } returns false }
+
+        assertFalse(DashTuneMusicService.isStillQueuedOrCached(download(Download.STATE_COMPLETED, "track-1"), cache))
+    }
+
+    @Test
+    fun `a completed favourite still in the cache is left alone`() {
+        val cache = mockk<Cache> { every { isCached("track-1", 0, 1_000L) } returns true }
+
+        assertTrue(DashTuneMusicService.isStillQueuedOrCached(download(Download.STATE_COMPLETED, "track-1"), cache))
+    }
+
+    @Test
+    fun `a favourite downloaded under its URL key is downloaded again under the track id`() {
+        val cache = mockk<Cache> { every { isCached(any(), any(), any()) } returns true }
+
+        assertFalse(DashTuneMusicService.isStillQueuedOrCached(download(Download.STATE_COMPLETED, null), cache))
+    }
+
+    @Test
+    fun `a queued or running favourite download is not queued twice`() {
+        val cache = mockk<Cache>()
+
+        assertTrue(DashTuneMusicService.isStillQueuedOrCached(download(Download.STATE_QUEUED, "track-1"), cache))
+        assertTrue(DashTuneMusicService.isStillQueuedOrCached(download(Download.STATE_DOWNLOADING, "track-1"), cache))
+        assertFalse(DashTuneMusicService.isStillQueuedOrCached(download(Download.STATE_FAILED, "track-1"), cache))
+    }
+
+    // --- Focus watchdog ---
+
+    @Test
+    fun `a call or its ringing holds focus legitimately`() {
+        assertTrue(DashTuneMusicService.isCallInProgress(AudioManager.MODE_IN_CALL))
+        assertTrue(DashTuneMusicService.isCallInProgress(AudioManager.MODE_IN_COMMUNICATION))
+        assertTrue(DashTuneMusicService.isCallInProgress(AudioManager.MODE_RINGTONE))
+        assertFalse(DashTuneMusicService.isCallInProgress(AudioManager.MODE_NORMAL))
     }
 }

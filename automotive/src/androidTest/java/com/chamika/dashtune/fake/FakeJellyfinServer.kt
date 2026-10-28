@@ -150,6 +150,10 @@ class FakeJellyfinServer(
             segments.size == 3 && segments[0] == "Artists" && segments[2] == "InstantMix" ->
                 instantMixQuery(url, segments[1])
 
+            // GET /Songs/{itemId}/InstantMix — what a track picked by voice carries on into.
+            segments.size == 3 && segments[0] == "Songs" && segments[2] == "InstantMix" ->
+                songMixQuery(url, segments[1])
+
             segments == listOf("UserViews") ->
                 json(JellyfinJson.encode(queryResult(library.views)))
 
@@ -221,6 +225,19 @@ class FakeJellyfinServer(
         if (mediaTypes.contains(MediaType.AUDIO.serialName)) {
             results = results.filter { it.isAudio || it.kind == BaseItemKind.AUDIO_BOOK }
         }
+
+        limitOf(url)?.let { results = results.take(it) }
+
+        return json(JellyfinJson.encode(queryResult(results)))
+    }
+
+    /** An instant mix seeded from one song: here, other tracks by the same album artists. */
+    private fun songMixQuery(url: HttpUrl, songId: String): MockResponse {
+        val song = songId.asUuid()?.let { library.byId(it) } ?: return MockResponse.Builder().code(404).build()
+
+        var results = library.items
+            .filter { it.isAudio && it.albumArtistIds.any(song.albumArtistIds::contains) }
+            .shuffled(Random(shuffleSeed))
 
         limitOf(url)?.let { results = results.take(it) }
 

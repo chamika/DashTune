@@ -141,7 +141,13 @@ class MediaRepository(
         }
     }
 
-    suspend fun getChildren(parentId: String): List<MediaItem> {
+    /**
+     * Children from the cache, else from the server. A parent that is not cached and cannot be
+     * fetched comes back empty, which playback relies on (a single-file audiobook has no
+     * children). Browsing passes [failOnError] instead, so the head unit shows "unavailable"
+     * with a Retry rather than an empty page that reads as "nothing here".
+     */
+    suspend fun getChildren(parentId: String, failOnError: Boolean = false): List<MediaItem> {
         if (parentId == ROOT_ID) {
             return tree.getChildren(ROOT_ID)
         }
@@ -172,23 +178,26 @@ class MediaRepository(
             }
         }
 
-        return fetch.await()
+        return try {
+            fetch.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to fetch children for $parentId from network", e)
+            if (failOnError) throw e
+            emptyList()
+        }
     }
 
     private suspend fun fetchAndCacheChildren(parentId: String): List<MediaItem> {
-        return try {
-            val children = tree.getChildren(parentId)
-            if (children.isNotEmpty()) {
-                val entities = children.mapIndexed { index, item ->
-                    item.toEntity(parentId, index)
-                }
-                dao.replaceChildren(mapOf(parentId to entities))
+        val children = tree.getChildren(parentId)
+        if (children.isNotEmpty()) {
+            val entities = children.mapIndexed { index, item ->
+                item.toEntity(parentId, index)
             }
-            children
-        } catch (e: Exception) {
-            Log.w(LOG_TAG, "Failed to fetch children for $parentId from network", e)
-            emptyList()
+            dao.replaceChildren(mapOf(parentId to entities))
         }
+        return children
     }
 
     /**
@@ -282,6 +291,18 @@ class MediaRepository(
     suspend fun getSavedQueue(): List<MediaItem> =
         dao.getChildrenByParent(SAVED_QUEUE).map { it.toMediaItem() }
 
+    /** Empty when the mix cannot be fetched: the song itself still plays. */
+    suspend fun getSongMixTracks(songId: String): List<MediaItem> {
+        return try {
+            withContext(Dispatchers.IO) { tree.getSongMixTracks(songId) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Song mix failed for $songId", e)
+            emptyList()
+        }
+    }
+
     suspend fun getArtistRadioTracks(artistId: String): List<MediaItem> {
         return try {
             withContext(Dispatchers.IO) { tree.getArtistRadioTracks(artistId) }
@@ -318,9 +339,25 @@ class MediaRepository(
         }
     }
 
+    /**
+     * A head unit asks for every query twice — onSearch for the count, then onGetSearchResult
+     * for the items — so the last answer is kept briefly and the second ask costs nothing.
+     */
     suspend fun search(query: String): List<MediaItem> {
-        return tree.search(query)
+        lastSearch?.let {
+            if (it.query == query && SystemClock.elapsedRealtime() < it.expiresAtMs) return it.results
+        }
+        val results = tree.search(query)
+        lastSearch = SearchResult(query, results, SystemClock.elapsedRealtime() + searchTtlMs)
+        return results
     }
+
+    private class SearchResult(val query: String, val results: List<MediaItem>, val expiresAtMs: Long)
+
+    private val searchTtlMs = 30 * 1000L
+
+    @Volatile
+    private var lastSearch: SearchResult? = null
 
     suspend fun getShuffledTracks(folderId: String): List<MediaItem> {
         return try {
@@ -353,6 +390,7 @@ class MediaRepository(
 
     fun invalidateCache() {
         tree.invalidateCache()
+        lastSearch = null
         invalidateHome()
     }
 
@@ -537,6 +575,7 @@ class MediaRepository(
         val isAudiobook = extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
         if (isPlayable && (mediaType == MEDIA_TYPE_MUSIC || isAudiobook)) {
             itemBuilder.setUri(itemFactory.streamingUri(mediaId))
+                .setCustomCacheKey(mediaId)
         }
 
         return itemBuilder.build()

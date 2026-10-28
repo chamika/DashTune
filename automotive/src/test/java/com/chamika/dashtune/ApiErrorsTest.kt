@@ -5,10 +5,18 @@ import org.jellyfin.sdk.api.client.exception.TimeoutException
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import android.net.Uri
+import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
 import java.io.InterruptedIOException
 import java.net.ConnectException
 import java.net.UnknownHostException
 
+// Robolectric for the DataSpec Uri inside an ExoPlayer stream error.
+@RunWith(RobolectricTestRunner::class)
 class ApiErrorsTest {
 
     @Test
@@ -36,5 +44,24 @@ class ApiErrorsTest {
     fun `a timeout or a server error is not just being offline`() {
         assertFalse(ApiErrors.isOffline(TimeoutException("timeout", InterruptedIOException("timeout"))))
         assertFalse(ApiErrors.isOffline(InvalidStatusException(503)))
+    }
+
+    private fun streamError(status: Int) = PlaybackException(
+        "Source error",
+        HttpDataSource.InvalidResponseCodeException(
+            status, null, null, emptyMap(), DataSpec(Uri.parse("https://jf.example/Audio/1/universal")), ByteArray(0)
+        ),
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+    )
+
+    @Test
+    fun `a stream refused with 401 is a rejected token`() {
+        assertTrue(ApiErrors.isUnauthorizedStream(streamError(401)))
+    }
+
+    @Test
+    fun `a stream that failed with another status is not`() {
+        assertFalse(ApiErrors.isUnauthorizedStream(streamError(404)))
+        assertFalse(ApiErrors.isUnauthorizedStream(streamError(500)))
     }
 }

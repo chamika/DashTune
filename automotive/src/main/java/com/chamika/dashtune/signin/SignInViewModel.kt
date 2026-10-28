@@ -9,6 +9,7 @@ import com.chamika.dashtune.Constants.LOG_TAG
 import com.chamika.dashtune.FirebaseUtils
 import com.chamika.dashtune.auth.JellyfinAccountManager
 import com.chamika.dashtune.tls.CertificateInspector
+import com.chamika.dashtune.tls.CleartextPolicy
 import com.chamika.dashtune.tls.ServerCertificate
 import com.chamika.dashtune.tls.TrustedCertificateStore
 import com.chamika.dashtune.tls.isCertificateTrustFailure
@@ -42,6 +43,9 @@ class SignInViewModel @Inject constructor() : ViewModel() {
     @Inject
     lateinit var certificateInspector: CertificateInspector
 
+    @Inject
+    lateinit var cleartextPolicy: CleartextPolicy
+
     private var quickConnectSecret: String = ""
 
     private val _loggedIn = MutableLiveData<Boolean>()
@@ -62,8 +66,9 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             if (response.status == 200) PingResult.Success else PingResult.Unreachable
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Error", e)
-            val host = try { java.net.URI(serverUrl).host ?: "unknown" } catch (_: Exception) { "invalid_url" }
-            FirebaseUtils.safeSetCustomKey("server_url_host", host)
+            // The scheme only: a self-hosted domain usually identifies the person running it.
+            val scheme = try { java.net.URI(serverUrl).scheme ?: "none" } catch (_: Exception) { "invalid_url" }
+            FirebaseUtils.safeSetCustomKey("server_url_scheme", scheme)
 
             // A rejected certificate is a state the user can resolve, so offer the prompt instead
             // of recording it as a crash. Only report it when we can't read the certificate back,
@@ -71,7 +76,7 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             if (isCertificateTrustFailure(e)) {
                 val certificate = certificateInspector.inspect(serverUrl)
                 if (certificate != null) {
-                    FirebaseUtils.safeLog("Untrusted certificate presented by $host")
+                    FirebaseUtils.safeLog("Untrusted certificate presented by the server")
                     return PingResult.UntrustedCertificate(certificate)
                 }
             }
@@ -79,6 +84,18 @@ class SignInViewModel @Inject constructor() : ViewModel() {
             FirebaseUtils.safeRecordException(e)
             PingResult.Unreachable
         }
+    }
+
+    /**
+     * The host to warn about before connecting to [serverUrl] over plain http, or null when it
+     * is https or on the local network. Every request would carry the token unencrypted.
+     */
+    fun hostNeedingCleartextConsent(serverUrl: String): String? = cleartextPolicy.hostNeedingConsent(serverUrl)
+
+    /** The user accepted sending their sign-in to [host] unencrypted. */
+    fun allowCleartext(host: String) {
+        FirebaseUtils.safeLog("User allowed an unencrypted server")
+        cleartextPolicy.allow(host)
     }
 
     /** Accept [certificate] for its host, so every later connection to it succeeds. */
@@ -186,7 +203,7 @@ class SignInViewModel @Inject constructor() : ViewModel() {
     }
 
     private fun loginSuccess(server: String, username: String, token: String) {
-        Log.i(LOG_TAG, "$username successfully authenticated")
+        Log.i(LOG_TAG, "Successfully authenticated")
         accountManager.storeAccount(server, username, token)
         _loggedIn.postValue(true)
     }

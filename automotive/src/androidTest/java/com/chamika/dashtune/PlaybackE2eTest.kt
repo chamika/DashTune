@@ -1,5 +1,14 @@
 package com.chamika.dashtune
 
+import android.content.ComponentName
+import android.content.Context
+import android.os.Bundle
+import android.provider.MediaStore
+import androidx.test.core.app.ApplicationProvider
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import android.media.browse.MediaBrowser as PlatformMediaBrowser
+import android.media.session.MediaController as PlatformMediaController
 import androidx.media3.common.Player
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.chamika.dashtune.support.DashTuneE2eRule
@@ -8,6 +17,7 @@ import com.chamika.dashtune.support.childrenOf
 import com.chamika.dashtune.support.onMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -130,5 +140,55 @@ class PlaybackE2eTest {
         awaitCondition(message = { "playback to resume after the seek" }) {
             browser.playbackState == Player.STATE_READY && browser.currentPosition >= 1_400
         }
+    }
+
+    /**
+     * The path Assistant takes for "Play X on DashTune": a platform MediaController calling
+     * playFromSearch, which Media3 turns into one id-less item carrying the query.
+     */
+    @Test
+    fun aVoiceRequestPlaysTheTrackItNamed() {
+        val track = fixture.featuredTracks[1]
+        val controller = platformController()
+
+        onMain {
+            controller.transportControls.playFromSearch(
+                track.name,
+                Bundle().apply {
+                    putString(MediaStore.EXTRA_MEDIA_FOCUS, MediaStore.Audio.Media.ENTRY_CONTENT_TYPE)
+                    putString(MediaStore.EXTRA_MEDIA_TITLE, track.name)
+                }
+            )
+        }
+
+        awaitCondition(message = { "the named track to become current" }) {
+            browser.currentMediaItem?.mediaId == track.id.toString()
+        }
+        awaitCondition(message = { "player to report playing" }) { browser.isPlaying }
+    }
+
+    private var platformBrowser: PlatformMediaBrowser? = null
+
+    @After
+    fun disconnectPlatformBrowser() {
+        platformBrowser?.let { onMain { it.disconnect() } }
+    }
+
+    private fun platformController(): PlatformMediaController {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val connected = CountDownLatch(1)
+        val platform = onMain {
+            PlatformMediaBrowser(
+                context,
+                ComponentName(context, DashTuneMusicService::class.java),
+                object : PlatformMediaBrowser.ConnectionCallback() {
+                    override fun onConnected() = connected.countDown()
+                },
+                null
+            ).also { it.connect() }
+        }
+        platformBrowser = platform
+        assertTrue("platform MediaBrowser did not connect", connected.await(30, TimeUnit.SECONDS))
+        return onMain { PlatformMediaController(context, platform.sessionToken) }
     }
 }

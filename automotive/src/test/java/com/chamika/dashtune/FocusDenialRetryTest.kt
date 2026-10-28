@@ -155,4 +155,63 @@ class FocusDenialRetryTest {
             Thread.sleep(2)
         }
     }
+
+    // --- After the service's watchdog recovers focus ---
+
+    /** The car refuses every focus request, the way it does while a call holds focus. */
+    private fun carRefusesFocus() {
+        every { player.playWhenReady = any() } answers {
+            if (firstArg<Boolean>()) playRefused()
+            else retry.onPlayWhenReadyChanged(false, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+        }
+        every { player.play() } answers { playRefused() }
+    }
+
+    @Test
+    fun `a recovery refused during a call keeps asking slowly instead of giving up`() {
+        carRefusesFocus()
+
+        retry.recoverFocus()
+        // Well past the five quick retries a refused play() would get.
+        repeat(20) { advance(FocusDenialRetry.SLOW_RETRY_DELAY_MS) }
+
+        verify(exactly = 20) { player.play() }
+    }
+
+    @Test
+    fun `slow retries stop once playback resumes`() {
+        carRefusesFocus()
+        retry.recoverFocus()
+        advance(FocusDenialRetry.SLOW_RETRY_DELAY_MS)
+
+        // The call ended and the next request was granted.
+        retry.onIsPlayingChanged(true)
+        every { player.play() } answers { }
+        advance(FocusDenialRetry.SLOW_RETRY_DELAY_MS * 3)
+
+        verify(exactly = 1) { player.play() }
+    }
+
+    @Test
+    fun `a pause by the user ends the slow retries`() {
+        carRefusesFocus()
+        retry.recoverFocus()
+
+        retry.onPlayWhenReadyChanged(false, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+        advance(FocusDenialRetry.SLOW_RETRY_DELAY_MS * 3)
+
+        verify(exactly = 0) { player.play() }
+    }
+
+    @Test
+    fun `slow retries give up when the window runs out`() {
+        carRefusesFocus()
+        retry.recoverFocus()
+
+        val attempts = (FocusDenialRetry.SLOW_RETRY_WINDOW_MS / FocusDenialRetry.SLOW_RETRY_DELAY_MS).toInt()
+        repeat(attempts + 10) { advance(FocusDenialRetry.SLOW_RETRY_DELAY_MS) }
+
+        verify(atMost = attempts + 1) { player.play() }
+        verify(atLeast = attempts - 1) { player.play() }
+    }
 }
