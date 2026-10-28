@@ -7,6 +7,7 @@ import android.text.TextUtils
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ProgressBar
@@ -44,6 +45,15 @@ class ServerSignInFragment : Fragment() {
         submitServer = view.findViewById(R.id.submit_server_button)
         progressBar = view.findViewById(R.id.progress_bar)
         errorText = view.findViewById(R.id.error_text)
+
+        serverInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_GO) {
+                submitServer.performClick()
+                true
+            } else {
+                false
+            }
+        }
 
         submitServer.setOnClickListener {
             val serverUrl = serverInput.text

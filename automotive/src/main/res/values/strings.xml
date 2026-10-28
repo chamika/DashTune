@@ -2,6 +2,7 @@
     <string name="app_name">DashTune</string>
     <string name="sign_in_to_your_jellyfin_server">Sign in to your Jellyfin server</string>
     <string name="server_textfield_hint">https://myjellyfin.server.com:8096</string>
+    <string name="server_url_label">Server URL</string>
     <string name="server_button_label">Connect to server</string>
     <string name="server_textfield_error">Server URL cannot be empty</string>
     <string name="quickconnect">QuickConnect</string>
@@ -9,9 +10,10 @@
     <string name="quickconnect_instructions">Open Jellyfin on your phone,\nselect QuickConnect,\nand enter this code.</string>
     <string name="error">Error</string>
     <string name="unavailable">Unavailable</string>
-    <string name="username_textfield_hint">username</string>
-    <string name="password_textfield_hint">password</string>
-    <string name="login_button_label">Log In</string>
+    <string name="username_textfield_hint">Username</string>
+    <string name="password_textfield_hint">Password</string>
+    <string name="show_password">Show password</string>
+    <string name="login_button_label">Sign in</string>
     <string name="username_textfield_error">Username cannot be empty</string>
     <string name="server_unreachable">Could not reach server</string>
     <string name="login_unsuccessful">Failed to login</string>
