@@ -745,9 +745,9 @@ class MediaRepositorySyncTest {
     }
 
     @Test
-    fun `getContentParentId skips all static IDs including BOOKS and RANDOM_ALBUMS`() = runTest {
+    fun `getContentParentId skips all static IDs including BOOKS and RANDOM_TRACKS`() = runTest {
         coEvery { dao.getParentIds("track-1") } returns listOf(
-            ROOT_ID, LATEST_ALBUMS, "RANDOM_ALBUMS_ID", FAVOURITES, PLAYLISTS, BOOKS
+            ROOT_ID, LATEST_ALBUMS, "RANDOM_TRACKS_ID", FAVOURITES, PLAYLISTS, BOOKS
         )
 
         val result = repository.getContentParentId("track-1")

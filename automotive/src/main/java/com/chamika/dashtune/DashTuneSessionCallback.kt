@@ -31,6 +31,7 @@ import com.chamika.dashtune.data.MediaRepository
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.TrackList
 import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RESUME_QUEUE
@@ -564,7 +565,7 @@ class DashTuneSessionCallback(
                 resolvedItems,
                 // indexOfFirst returns -1 when the selected item isn't among the resolved
                 // children (e.g. stale cache); fall back to the first item.
-                resolvedItems.indexOfFirst { it.mediaId == singleItem.mediaId }.coerceAtLeast(0),
+                resolvedItems.indexOfFirst { it.mediaId == TrackList.trackId(singleItem.mediaId) }.coerceAtLeast(0),
                 startPositionMs
             )
             savePlaylist(resolvedItems, queueTitle)
@@ -939,7 +940,7 @@ class DashTuneSessionCallback(
     // Direct SDK calls below run on IO: launchFuture resumes on main, and the SDK reads the
     // response body on whichever thread resumes it.
     private suspend fun applyRating(currentMediaItem: String, newRating: Rating): Unit = withContext(Dispatchers.IO) {
-        val id = currentMediaItem.toUUID()
+        val id = TrackList.trackId(currentMediaItem).toUUID()
 
         if (newRating == HeartRating(true)) {
             Log.i(LOG_TAG, "Marking as favorite")

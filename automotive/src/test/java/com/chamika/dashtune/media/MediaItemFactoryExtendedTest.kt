@@ -12,7 +12,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_FOLDER_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
-import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_TRACKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
@@ -132,7 +132,7 @@ class MediaItemFactoryExtendedTest {
 
     @Test
     fun `all category ID constants are unique`() {
-        val ids = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS)
+        val ids = setOf(ROOT_ID, LATEST_ALBUMS, RANDOM_TRACKS, FAVOURITES, PLAYLISTS, BOOKS)
         assertEquals(6, ids.size)
     }
 

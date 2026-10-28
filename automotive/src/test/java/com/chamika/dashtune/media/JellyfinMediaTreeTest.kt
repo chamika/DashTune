@@ -12,7 +12,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
-import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_TRACKS
 import io.mockk.mockk
 import org.jellyfin.sdk.api.client.ApiClient
 import org.junit.Assert.assertEquals
@@ -66,7 +66,7 @@ class JellyfinMediaTreeTest {
     }
 
     @Test
-    fun `getActiveCategoryIds includes random albums when that category is selected`() {
+    fun `getActiveCategoryIds includes random tracks when that category is selected`() {
         PreferenceManager.getDefaultSharedPreferences(context).edit()
             .putStringSet("browse_categories", setOf("latest", "favourites", "random"))
             .commit()
@@ -76,7 +76,7 @@ class JellyfinMediaTreeTest {
         assertEquals(3, ids.size)
         assertTrue(ids.contains(LATEST_ALBUMS))
         assertTrue(ids.contains(FAVOURITES))
-        assertTrue(ids.contains(RANDOM_ALBUMS))
+        assertTrue(ids.contains(RANDOM_TRACKS))
     }
 
     @Test
@@ -137,7 +137,7 @@ class JellyfinMediaTreeTest {
         assertEquals(FAVOURITES, ids[1])
         assertEquals(BOOKS, ids[2])
         assertEquals(PLAYLISTS, ids[3])
-        assertEquals(RANDOM_ALBUMS, ids[4])
+        assertEquals(RANDOM_TRACKS, ids[4])
         assertEquals(FOLDERS, ids[5])
     }
 
