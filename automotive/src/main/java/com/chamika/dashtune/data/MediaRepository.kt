@@ -2,10 +2,12 @@ package com.chamika.dashtune.data
 
 import android.os.SystemClock
 import android.util.Log
+import androidx.annotation.OptIn
 import androidx.core.net.toUri
 import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_ALBUM
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_ARTIST
 import androidx.media3.common.MediaMetadata.MEDIA_TYPE_MUSIC
@@ -16,10 +18,13 @@ import com.chamika.dashtune.data.db.CachedMediaItemEntity
 import com.chamika.dashtune.data.db.MediaCacheDao
 import com.chamika.dashtune.media.JellyfinMediaTree
 import com.chamika.dashtune.media.MediaItemFactory
+import com.chamika.dashtune.media.TrackList
+import com.chamika.dashtune.media.MediaItemFactory.Companion.TRACK_ARTIST_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_TRACKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.BOOKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ALBUMS
@@ -74,7 +79,7 @@ class MediaRepository(
     private val queueWrites = Dispatchers.IO.limitedParallelism(1)
 
     private val staticIds = setOf(
-        ROOT_ID, HOME, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS,
+        ROOT_ID, HOME, LATEST_ALBUMS, RANDOM_ALBUMS, RANDOM_TRACKS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS,
         ARTISTS, ALBUMS, GENRES
     )
 
@@ -121,6 +126,10 @@ class MediaRepository(
     private var homeExpiresAtMs = 0L
 
     suspend fun getItem(id: String): MediaItem {
+        TrackList.parentId(id)?.let { parentId ->
+            return getChildren(parentId).firstOrNull { it.mediaId == id }
+                ?: TrackList.browseItem(getItem(TrackList.trackId(id)), parentId)
+        }
         if (id in staticIds) {
             return tree.getItem(id)
         }
@@ -158,12 +167,12 @@ class MediaRepository(
 
         val cached = dao.getChildrenByParent(parentId)
         if (cached.isNotEmpty()) {
-            return cached.map { it.toMediaItem() }
+            return cached.map { TrackList.browseItem(it.toMediaItem(), parentId) }
         }
 
         // Paginating browsers ask for several pages at once, so a cold parent can be
         // requested concurrently. Without coalescing, each caller fetches independently —
-        // and for RANDOM_ALBUMS every fetch is a different set of albums, so the writes
+        // and for RANDOM_TRACKS every fetch is a different set of tracks, so the writes
         // below would union two random results under one parentId with colliding
         // sortOrder values, leaving the browse order unstable from then on.
         val fetch = synchronized(inFlightLock) {
@@ -179,7 +188,7 @@ class MediaRepository(
         }
 
         return try {
-            fetch.await()
+            fetch.await().map { TrackList.browseItem(it, parentId) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -545,6 +554,7 @@ class MediaRepository(
         )
     }
 
+    @OptIn(UnstableApi::class)
     private fun CachedMediaItemEntity.toMediaItem(): MediaItem {
         val extras = extras?.let { json ->
             val jsonObj = JSONObject(json)
@@ -562,6 +572,7 @@ class MediaRepository(
         val metadataBuilder = MediaMetadata.Builder()
             .setTitle(title)
             .setAlbumArtist(subtitle)
+            .setArtist(extras?.getString(TRACK_ARTIST_KEY) ?: subtitle)
             .setIsBrowsable(isBrowsable)
             .setIsPlayable(isPlayable)
             .setMediaType(mediaType)

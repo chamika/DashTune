@@ -18,6 +18,7 @@ import com.chamika.dashtune.support.awaitCondition
 import com.chamika.dashtune.support.childrenOf
 import com.chamika.dashtune.support.onMain
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
+import com.chamika.dashtune.media.TrackList
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -60,18 +61,18 @@ class PlaybackE2eTest {
         val before = browser.childrenOf(FAVOURITES)
         val track = fixture.featuredTracks.first { !it.isFavorite }
         val id = track.id.toString()
-        assertFalse(before.any { it.mediaId == id })
+        assertFalse(before.any { TrackList.trackId(it.mediaId) == id })
         val added = onMain { browser.setRating(id, HeartRating(true)) }.get(15, TimeUnit.SECONDS)
         assertEquals(SessionResult.RESULT_SUCCESS, added.resultCode)
         assertTrue(dashTune.server.library.byId(track.id)?.isFavorite == true)
         assertTrue("The warm browse cache must include the newly liked track",
-            browser.childrenOf(FAVOURITES).any { it.mediaId == id })
+            browser.childrenOf(FAVOURITES).any { TrackList.trackId(it.mediaId) == id })
 
         val removed = onMain { browser.setRating(id, HeartRating(false)) }.get(15, TimeUnit.SECONDS)
         assertEquals(SessionResult.RESULT_SUCCESS, removed.resultCode)
         assertFalse(dashTune.server.library.byId(track.id)?.isFavorite == true)
         assertFalse("The warm browse cache must remove the unliked track",
-            browser.childrenOf(FAVOURITES).any { it.mediaId == id })
+            browser.childrenOf(FAVOURITES).any { TrackList.trackId(it.mediaId) == id })
     }
 
     @Test
