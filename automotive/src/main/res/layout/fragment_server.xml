@@ -39,9 +39,16 @@
                 style="@style/Widget.DashTune.OnboardingInput"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:hint="@string/server_textfield_hint"
                 android:imeOptions="actionGo|flagNoExtractUi"
+                android:importantForAutofill="no"
                 android:inputType="textUri" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/server_textfield_hint"
+                android:textSize="24sp" />
 
             <Button
                 android:id="@+id/submit_server_button"
