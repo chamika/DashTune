@@ -9,7 +9,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
-import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_TRACKS
 
 /**
  * The single source of truth for the root browse tabs: which preference key maps to which
@@ -38,7 +38,7 @@ object BrowseCategories {
         "favourites" to FAVOURITES,
         "books" to BOOKS,
         "playlists" to PLAYLISTS,
-        "random" to RANDOM_ALBUMS,
+        "random" to RANDOM_TRACKS,
         "folders" to FOLDERS,
         "artists" to ARTISTS,
         "albums" to ALBUMS,

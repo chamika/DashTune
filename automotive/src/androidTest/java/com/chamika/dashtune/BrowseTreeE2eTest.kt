@@ -11,7 +11,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.FOLDERS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
-import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_TRACKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
@@ -52,7 +52,7 @@ class BrowseTreeE2eTest {
         assertEquals(
             listOf(
                 LATEST_ALBUMS, FAVOURITES, BOOKS, PLAYLISTS,
-                RANDOM_ALBUMS, FOLDERS, ARTISTS, ALBUMS, GENRES,
+                RANDOM_TRACKS, FOLDERS, ARTISTS, ALBUMS, GENRES,
             ),
             browser.childIdsOf(ROOT_ID)
         )
@@ -97,7 +97,7 @@ class BrowseTreeE2eTest {
 
         assertEquals(
             setOf(
-                fixture.favouriteTrack.id.toString(),
+                "$FAVOURITES/${fixture.favouriteTrack.id}",
                 fixture.favouriteAlbum.id.toString(),
                 fixture.favouriteArtist.id.toString(),
             ),

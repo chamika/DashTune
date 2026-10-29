@@ -14,7 +14,7 @@ const val RESUME_POSITION_MS = 1_200L
  * The library the E2E suite browses. Everything a test asserts against is exposed as a
  * named handle, so assertions read against the fixture rather than against magic strings.
  *
- * Sized so `RANDOM_ALBUMS` holds well over 60 albums — [com.chamika.dashtune.PaginatedBrowseTest]
+ * Sized so `RANDOM_TRACKS` holds well over 60 tracks — [com.chamika.dashtune.PaginatedBrowseTest]
  * needs more than 40 to make its three-page slice assertions meaningful, and used to skip
  * itself when a real server did not supply them.
  */

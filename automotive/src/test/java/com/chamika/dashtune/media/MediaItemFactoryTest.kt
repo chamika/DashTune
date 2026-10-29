@@ -17,7 +17,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.IS_AUDIOBOOK_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PARENT_KEY
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
-import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_TRACKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_GENRE_PREFIX
@@ -144,6 +144,17 @@ class MediaItemFactoryTest {
     }
 
     @Test
+    fun `track artist is used instead of the compilation album artist`() {
+        val dto = baseItem(BaseItemKind.AUDIO).copy(
+            artists = listOf("Track Artist", "Guest"), albumArtist = "Various Artists"
+        )
+        val metadata = factory.create(dto).mediaMetadata
+        assertEquals("Track Artist, Guest", metadata.artist)
+        assertEquals("Various Artists", metadata.albumArtist)
+        assertEquals("Track Artist, Guest", metadata.extras?.getString(MediaItemFactory.TRACK_ARTIST_KEY))
+    }
+
+    @Test
     fun `create audiobook has audiobook flag and streaming URI`() {
         val item = factory.create(baseItem(BaseItemKind.AUDIO_BOOK))
 
@@ -229,10 +240,10 @@ class MediaItemFactoryTest {
     }
 
     @Test
-    fun `randomAlbums is browsable with RANDOM_ALBUMS id`() {
-        val item = factory.randomAlbums()
+    fun `randomTracks is browsable with RANDOM_TRACKS id`() {
+        val item = factory.randomTracks()
 
-        assertEquals(RANDOM_ALBUMS, item.mediaId)
+        assertEquals(RANDOM_TRACKS, item.mediaId)
         assertTrue(item.mediaMetadata.isBrowsable == true)
         assertFalse(item.mediaMetadata.isPlayable == true)
     }
