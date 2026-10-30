@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "firebase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "firebase-tools@latest",
+        "mcp",
+        "--dir",
+        ".",
+        "--tools",
+        "crashlytics_get_issue,crashlytics_list_events,crashlytics_batch_get_events,crashlytics_get_report,crashlytics_list_notes,crashlytics_create_note,crashlytics_delete_note,crashlytics_update_issue,firebase_get_environment"
+      ]
+    }
+  }
+}
