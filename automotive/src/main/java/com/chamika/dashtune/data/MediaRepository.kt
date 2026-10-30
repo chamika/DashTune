@@ -175,6 +175,23 @@ class MediaRepository(
         return fetch.await()
     }
 
+    /** Refresh only the list changed by a heart action, retaining its offline copy on failure. */
+    suspend fun refreshFavourites(): List<MediaItem> = withContext(Dispatchers.IO) {
+        try {
+            val children = tree.getChildren(FAVOURITES)
+            // An empty success must remove the last favourite too.
+            dao.replaceChildren(mapOf(FAVOURITES to children.mapIndexed { index, item ->
+                item.toEntity(FAVOURITES, index)
+            }))
+            children
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to refresh favourites; keeping the cached list", e)
+            dao.getChildrenByParent(FAVOURITES).map { it.toMediaItem() }
+        }
+    }
+
     private suspend fun fetchAndCacheChildren(parentId: String): List<MediaItem> {
         return try {
             val children = tree.getChildren(parentId)

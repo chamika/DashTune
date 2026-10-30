@@ -172,7 +172,13 @@ class FakeJellyfinServer(
 
             segments.firstOrNull() == "Sessions" -> MockResponse.Builder().code(204).build()
 
-            segments.firstOrNull() == "UserFavoriteItems" -> MockResponse.Builder().code(204).build()
+            segments.size == 2 && segments[0] == "UserFavoriteItems" &&
+                request.method in listOf("POST", "DELETE") -> {
+                val item = segments[1].asUuid()?.let { library.byId(it) }
+                    ?: return MockResponse.Builder().code(404).build()
+                val updated = library.replace(item.copy(isFavorite = request.method == "POST"))
+                json(JellyfinJson.encode(updated.toUserData()))
+            }
 
             else -> {
                 unhandled += "${request.method} ${url.encodedPath}"
