@@ -9,10 +9,12 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import android.media.browse.MediaBrowser as PlatformMediaBrowser
 import android.media.session.MediaController as PlatformMediaController
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.HeartRating
 import androidx.media3.session.SessionResult
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.chamika.dashtune.fake.ServerBehavior
 import com.chamika.dashtune.support.DashTuneE2eRule
 import com.chamika.dashtune.support.awaitCondition
 import com.chamika.dashtune.support.childrenOf
@@ -20,6 +22,7 @@ import com.chamika.dashtune.support.onMain
 import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -96,6 +99,82 @@ class PlaybackE2eTest {
         assertFalse(dashTune.server.library.byId(track.id)?.isFavorite == true)
         assertFalse("The held, older favourites list must not overwrite the newer one",
             browser.childrenOf(FAVOURITES).any { it.mediaId == id })
+    }
+
+    @Test
+    fun aSecondRatingWaitsForTheFirstToReachTheServer() {
+        val track = fixture.featuredTracks.first { !it.isFavorite }
+        val id = track.id.toString()
+
+        dashTune.server.holdNext(2_000) { url -> url.encodedPath.startsWith("/UserFavoriteItems") }
+        val heart = onMain { browser.setRating(id, HeartRating(true)) }
+        assertTrue("The heart never reached the server", dashTune.server.awaitHeldRequest())
+        val unheart = onMain { browser.setRating(id, HeartRating(false)) }
+        Thread.sleep(1_000)
+
+        assertEquals("The unheart must wait while the heart's answer is outstanding",
+            listOf("POST"), dashTune.server.requestsTo("/UserFavoriteItems").map { it.method })
+
+        assertEquals(SessionResult.RESULT_SUCCESS, heart.get(15, TimeUnit.SECONDS).resultCode)
+        assertEquals(SessionResult.RESULT_SUCCESS, unheart.get(15, TimeUnit.SECONDS).resultCode)
+        assertEquals(listOf("POST", "DELETE"),
+            dashTune.server.requestsTo("/UserFavoriteItems").map { it.method })
+        assertFalse(dashTune.server.library.byId(track.id)?.isFavorite == true)
+    }
+
+    /**
+     * Starts the album and pauses on its first track. The fixture tone lasts 3s, so a test that
+     * kept playing would soon be reading the next track's heart, not the one it rated.
+     */
+    private fun startAlbumPaused(): MediaItem {
+        startAlbum()
+        awaitCondition(message = { "player to report playing" }) { browser.isPlaying }
+        onMain { browser.pause() }
+        awaitCondition(message = { "player to pause" }) { !browser.isPlaying }
+        return onMain { browser.currentMediaItem!! }
+    }
+
+    /** The rating the queue holds for [mediaId], wherever the player has got to. */
+    private fun queuedRating(mediaId: String) = onMain {
+        (0 until browser.mediaItemCount).map { browser.getMediaItemAt(it) }
+            .first { it.mediaId == mediaId }.mediaMetadata.userRating
+    }
+
+    @Test
+    fun ratingAnotherTrackLeavesThePlayingTracksHeartAlone() {
+        val playing = startAlbumPaused()
+        val other = fixture.featuredTracks.first { it.id.toString() != playing.mediaId && !it.isFavorite }
+
+        val result = onMain { browser.setRating(other.id.toString(), HeartRating(true)) }
+            .get(15, TimeUnit.SECONDS)
+
+        assertEquals(SessionResult.RESULT_SUCCESS, result.resultCode)
+        assertEquals(playing.mediaMetadata.userRating, queuedRating(playing.mediaId))
+    }
+
+    @Test
+    fun aRatingTheServerRefusesPutsTheHeartBack() {
+        val playing = startAlbumPaused()
+        val before = playing.mediaMetadata.userRating
+        val wanted = HeartRating(!((before as? HeartRating)?.isHeart ?: false))
+
+        // Held, or the refusal could arrive before the browser has even seen the heart change,
+        // and the rating would read as restored without anything having restored it.
+        dashTune.server.holdNext(2_000) { url -> url.encodedPath.startsWith("/UserFavoriteItems") }
+        dashTune.server.behavior = ServerBehavior.ServerError
+        try {
+            val rating = onMain { browser.setRating(playing.mediaId, wanted) }
+            awaitCondition(message = { "the heart to change while the rating is in flight" }) {
+                queuedRating(playing.mediaId) == wanted
+            }
+            assertNotEquals(SessionResult.RESULT_SUCCESS, rating.get(15, TimeUnit.SECONDS).resultCode)
+        } finally {
+            dashTune.server.behavior = ServerBehavior.Healthy
+        }
+
+        awaitCondition(timeoutMs = 5_000, message = { "the heart to be restored" }) {
+            queuedRating(playing.mediaId) == before
+        }
     }
 
     @Test

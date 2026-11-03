@@ -99,6 +99,11 @@ class JellyfinMediaTree(
         mediaItems.invalidateAll()
     }
 
+    /** Drops cached copies whose rating may be out of date; the next lookup fetches them. */
+    fun forgetItems(ids: List<String>) {
+        mediaItems.invalidateAll(ids)
+    }
+
     fun getActiveCategoryIds(): List<String> {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val selected = prefs.getStringSet(BrowseCategories.PREF_KEY, BrowseCategories.DEFAULTS)

@@ -781,6 +781,7 @@ class DashTuneMusicService : MediaLibraryService() {
         reporter.stopped(
             if (mediaLibrarySession.player.isPlaying) mediaLibrarySession.player.currentPosition else currentPlaybackTime
         )
+        if (::callback.isInitialized) callback.release()
         mediaLibrarySession.release()
         mediaLibrarySession.player.removeListener(playerListener)
         mediaLibrarySession.player.removeListener(focusDenialRetry)

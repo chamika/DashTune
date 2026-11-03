@@ -40,17 +40,23 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicLong
 
 class MediaRepository(
     private val dao: MediaCacheDao,
     private val tree: JellyfinMediaTree,
-    private val itemFactory: MediaItemFactory
+    private val itemFactory: MediaItemFactory,
+    /**
+     * Who the cache belongs to right now. A favourites response that outlives a sign-out or an
+     * account switch must not put the old account's rows back into Room.
+     */
+    private val currentAccount: () -> String? = { null }
 ) {
 
     companion object {
@@ -77,14 +83,19 @@ class MediaRepository(
     /**
      * Orders every write of the FAVOURITES rows: heart refreshes, sync and a cold browse each
      * fetch the list, and an older response landing after a newer one used to put back a
-     * track the user had just unhearted (#60). Each fetch takes a version just before its GET;
-     * a fetch that started later saw the server after every rating call that had returned by
-     * then, so only a fetch newer than the last write may write. A single-lane dispatcher
-     * would not do: it lets the next fetch in as soon as one suspends on the network.
+     * track the user had just unhearted (#60). Each fetch takes a version just before its GET.
+     * A response older than [favouritesMinVersion] may not write. A rating raises the floor when
+     * its refresh starts, not when that refresh succeeds, because every fetch older than the
+     * rating is wrong from then on, even if the refresh itself then fails. A write raises it
+     * past itself. A single-lane dispatcher would not do: it lets the next fetch in as soon as
+     * one suspends on the network.
      */
     private val favouritesVersion = AtomicLong()
+    private val favouritesMinVersion = AtomicLong()
     private val favouritesWriteLock = Mutex()
-    private var favouritesWrittenVersion = 0L // guarded by favouritesWriteLock
+
+    private val refreshLock = Any()
+    private var latestRefresh: Deferred<List<MediaItem>>? = null // guarded by refreshLock
 
     private val staticIds = setOf(
         ROOT_ID, HOME, LATEST_ALBUMS, RANDOM_ALBUMS, FAVOURITES, PLAYLISTS, BOOKS, FOLDERS,
@@ -202,68 +213,64 @@ class MediaRepository(
         }
     }
 
-    /** Refresh only the list changed by a heart action, retaining its offline copy on failure. */
-    suspend fun refreshFavourites(): List<MediaItem> = refreshFavouritesAsync().await()
-
     /**
-     * Starts the refresh in the repository's own scope, so a caller that stops waiting (the
-     * rating callback waits under a timeout) does not cancel the write: the newest refresh is
-     * the one whose write must land. Resolves to what Room holds once it is done.
+     * Refreshes only the list a heart action changed, retaining its offline copy on failure.
+     * Call after the rating has reached the server.
+     *
+     * Runs in the repository's own scope, so a caller that stops waiting (the rating callback
+     * waits under a timeout) does not cancel the write. It replaces any refresh still running:
+     * that response is already out of date, and tapping the heart repeatedly on a slow link
+     * should not leave one retrying request per tap.
      */
-    fun refreshFavouritesAsync(): Deferred<List<MediaItem>> = scope.async {
-        try {
-            val version = favouritesVersion.incrementAndGet()
-            val children = tree.getChildren(FAVOURITES)
-            writeFavouritesIfNewest(version) { newest ->
-                if (newest) {
-                    // An empty success must remove the last favourite too.
-                    dao.replaceChildren(mapOf(FAVOURITES to children.mapIndexed { index, item ->
-                        item.toEntity(FAVOURITES, index)
-                    }))
-                    children
-                } else {
-                    Log.i(LOG_TAG, "Favourites refresh overtaken by a newer fetch; not written")
-                    cachedFavourites()
-                }
+    fun refreshFavouritesAfterRating(ratedId: String): Deferred<List<MediaItem>> = synchronized(refreshLock) {
+        val superseded = latestRefresh
+        val version = favouritesVersion.incrementAndGet()
+        favouritesMinVersion.accumulateAndGet(version) { a, b -> maxOf(a, b) }
+        scope.async {
+            superseded?.cancelAndJoin()
+            // A list only names what is favourited, so nothing would ever correct the copy the
+            // tree cached with the old rating once the track drops off the list.
+            tree.forgetItems(listOf(ratedId))
+            try {
+                fetchAndWriteFavourites(version)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to refresh favourites; keeping the cached list", e)
+                cachedFavourites()
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(LOG_TAG, "Failed to refresh favourites; keeping the cached list", e)
-            cachedFavourites()
-        }
+        }.also { latestRefresh = it }
     }
 
     private suspend fun cachedFavourites(): List<MediaItem> =
         dao.getChildrenByParent(FAVOURITES).map { it.toMediaItem() }
 
-    /**
-     * Runs [write] under the favourites write lock, telling it whether the fetch tagged
-     * [version] is newer than the one that last wrote the FAVOURITES rows. Records [version]
-     * as written when it is. Held only for the database write, never across a fetch.
-     */
-    private suspend fun <T> writeFavouritesIfNewest(version: Long, write: suspend (newest: Boolean) -> T): T =
-        favouritesWriteLock.withLock {
-            val newest = version > favouritesWrittenVersion
-            val result = write(newest)
-            if (newest) favouritesWrittenVersion = version
-            result
+    /** Resolves to what Room holds for FAVOURITES once done. The lock is never held across the fetch. */
+    private suspend fun fetchAndWriteFavourites(version: Long): List<MediaItem> {
+        val account = currentAccount()
+        val children = tree.getChildren(FAVOURITES)
+        return favouritesWriteLock.withLock {
+            if (version < favouritesMinVersion.get() || currentAccount() != account) {
+                Log.i(LOG_TAG, "Favourites response overtaken; not written")
+                // The fetch has already cached these in the tree with the ratings it saw.
+                tree.forgetItems(children.map { it.mediaId })
+                return@withLock cachedFavourites()
+            }
+            // An empty success must remove the last favourite too.
+            dao.replaceChildren(mapOf(FAVOURITES to children.mapIndexed { index, item ->
+                item.toEntity(FAVOURITES, index)
+            }))
+            markFavouritesWritten(version)
+            children
         }
+    }
+
+    private fun markFavouritesWritten(version: Long) {
+        favouritesMinVersion.accumulateAndGet(version + 1) { a, b -> maxOf(a, b) }
+    }
 
     private suspend fun fetchAndCacheChildren(parentId: String): List<MediaItem> {
-        if (parentId == FAVOURITES) {
-            val version = favouritesVersion.incrementAndGet()
-            val children = tree.getChildren(FAVOURITES)
-            return writeFavouritesIfNewest(version) { newest ->
-                if (!newest) return@writeFavouritesIfNewest cachedFavourites()
-                if (children.isNotEmpty()) {
-                    dao.replaceChildren(mapOf(FAVOURITES to children.mapIndexed { index, item ->
-                        item.toEntity(FAVOURITES, index)
-                    }))
-                }
-                children
-            }
-        }
+        if (parentId == FAVOURITES) return fetchAndWriteFavourites(favouritesVersion.incrementAndGet())
 
         val children = tree.getChildren(parentId)
         if (children.isNotEmpty()) {
@@ -514,22 +521,23 @@ class MediaRepository(
         val reachedServer = sectionIds.any { it in refreshed }
         if (reachedServer) {
             // Under the favourites write lock even when this sync's favourites are current, so
-            // no refresh can write between the check and this write. A heart refresh that
-            // fetched after this sync did is newer: its rows stay and this sync's are dropped.
-            val syncedFavourites = FAVOURITES in refreshed
-            writeFavouritesIfNewest(if (syncedFavourites) favouritesFetchVersion else 0L) { newest ->
-                val keepFavourites = syncedFavourites && !newest
-                if (keepFavourites) {
+            // no refresh can write between the check and this write.
+            favouritesWriteLock.withLock {
+                val syncedFavourites = refreshed[FAVOURITES]
+                val stale = syncedFavourites != null && favouritesFetchVersion < favouritesMinVersion.get()
+                if (stale) {
                     Log.i(LOG_TAG, "Favourites changed during sync; keeping the newer list")
+                    tree.forgetItems(syncedFavourites.orEmpty().map { it.mediaId })
                 }
-                if (complete) {
-                    val items = refreshed.filterKeys { !keepFavourites || it != FAVOURITES }.values.flatten()
-                    val keep = if (keepFavourites) keptBySync + FAVOURITES else keptBySync
-                    dao.replaceAllExcept(items, keepParents = keep)
+                // A stale sync cannot replace the whole cache: it crawled the older list, so a
+                // full replace would delete the children of anything only the newer list has.
+                if (complete && !stale) {
+                    dao.replaceAllExcept(refreshed.values.flatten(), keepParents = keptBySync)
                 } else {
-                    val parents = if (keepFavourites) refreshed - FAVOURITES else refreshed
+                    val parents = if (stale) refreshed - FAVOURITES else refreshed
                     if (parents.isNotEmpty()) dao.replaceChildren(parents)
                 }
+                if (syncedFavourites != null && !stale) markFavouritesWritten(favouritesFetchVersion)
             }
         }
 
