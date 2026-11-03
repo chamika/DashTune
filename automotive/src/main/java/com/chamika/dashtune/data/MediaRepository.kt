@@ -40,7 +40,6 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -226,11 +225,13 @@ class MediaRepository(
         val superseded = latestRefresh
         val version = favouritesVersion.incrementAndGet()
         favouritesMinVersion.accumulateAndGet(version) { a, b -> maxOf(a, b) }
+        superseded?.cancel()
+        // A list only names what is favourited, so nothing would ever correct the copy the tree
+        // cached with the old rating once the track drops off the list. Not left to the refresh:
+        // the next rating can cancel that before it has started.
+        tree.forgetItems(listOf(ratedId))
         scope.async {
-            superseded?.cancelAndJoin()
-            // A list only names what is favourited, so nothing would ever correct the copy the
-            // tree cached with the old rating once the track drops off the list.
-            tree.forgetItems(listOf(ratedId))
+            superseded?.join()
             try {
                 fetchAndWriteFavourites(version)
             } catch (e: CancellationException) {

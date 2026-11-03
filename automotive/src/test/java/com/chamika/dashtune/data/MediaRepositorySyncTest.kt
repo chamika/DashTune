@@ -411,6 +411,21 @@ class MediaRepositorySyncTest {
     }
 
     @Test
+    fun `every rated track's cached copy is dropped, even if its refresh is replaced before it starts`() = runBlocking {
+        HeldFavourites()
+
+        refresh("first")
+        refresh("second")
+        val third = refresh("third")
+
+        // Checked straight away: a refresh replaced this quickly may never get to run at all.
+        coVerify(exactly = 1) { tree.forgetItems(listOf("first")) }
+        coVerify(exactly = 1) { tree.forgetItems(listOf("second")) }
+        coVerify(exactly = 1) { tree.forgetItems(listOf("third")) }
+        third.cancel()
+    }
+
+    @Test
     fun `a favourites response that lands after a sign-out does not repopulate Room`() = runBlocking {
         var account: String? = "token"
         repository = MediaRepository(dao, tree, itemFactory) { account }
