@@ -98,6 +98,48 @@ class MediaRepositorySyncTest {
 
     // --- sync() tests ---
 
+    @Test
+    fun `refreshing favourites replaces only that parent with the current server list`() = runTest {
+        val track = buildMediaItem("new-favourite", isFavorite = true)
+        coEvery { tree.getChildren(FAVOURITES) } returns listOf(track)
+
+        assertEquals(listOf("new-favourite"), repository.refreshFavourites().map { it.mediaId })
+
+        coVerify(exactly = 1) {
+            dao.replaceChildren(match { parents ->
+                parents.keys == setOf(FAVOURITES) &&
+                    parents.getValue(FAVOURITES).single().mediaId == "new-favourite"
+            })
+        }
+        coVerify(exactly = 0) { dao.replaceAllExcept(any(), any()) }
+        coVerify(exactly = 0) { dao.deleteAll() }
+    }
+
+    @Test
+    fun `removing the last favourite replaces its cached children with an empty list`() = runTest {
+        coEvery { tree.getChildren(FAVOURITES) } returns emptyList()
+
+        assertTrue(repository.refreshFavourites().isEmpty())
+
+        coVerify(exactly = 1) { dao.replaceChildren(mapOf(FAVOURITES to emptyList())) }
+    }
+
+    @Test
+    fun `a failed favourite refresh keeps the previous offline list`() = runTest {
+        val saved = CachedMediaItemEntity(
+            mediaId = "saved-favourite", parentId = FAVOURITES, title = "Saved favourite",
+            subtitle = null, artUri = null, mediaType = MediaMetadata.MEDIA_TYPE_MUSIC,
+            isPlayable = true, isBrowsable = false, sortOrder = 0, durationMs = null,
+            isFavorite = true, extras = null
+        )
+        coEvery { dao.getChildrenByParent(FAVOURITES) } returns listOf(saved)
+        coEvery { tree.getChildren(FAVOURITES) } throws UnknownHostException("offline")
+
+        assertEquals(listOf("saved-favourite"), repository.refreshFavourites().map { it.mediaId })
+
+        verifyNoCacheWrites()
+    }
+
     /** Every sync write goes through one of the two transactional replaces; nothing else may touch the cache. */
     private fun verifyNoCacheWrites() {
         coVerify(exactly = 0) { dao.replaceAllExcept(any(), any()) }

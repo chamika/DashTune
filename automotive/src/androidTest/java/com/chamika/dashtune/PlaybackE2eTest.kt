@@ -1,17 +1,22 @@
 package com.chamika.dashtune
 
 import androidx.media3.common.Player
+import androidx.media3.common.HeartRating
+import androidx.media3.session.SessionResult
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.chamika.dashtune.support.DashTuneE2eRule
 import com.chamika.dashtune.support.awaitCondition
 import com.chamika.dashtune.support.childrenOf
 import com.chamika.dashtune.support.onMain
+import com.chamika.dashtune.media.MediaItemFactory.Companion.FAVOURITES
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.TimeUnit
 
 /**
  * Plays real audio out of the simulated server through the real ExoPlayer instance the
@@ -40,6 +45,25 @@ class PlaybackE2eTest {
 
     @Before
     fun clearStreamRequests() = dashTune.server.clearRequests()
+
+    @Test
+    fun favouriteChangesRefreshTheBrowseCategory() {
+        val before = browser.childrenOf(FAVOURITES)
+        val track = fixture.featuredTracks.first { !it.isFavorite }
+        val id = track.id.toString()
+        assertFalse(before.any { it.mediaId == id })
+        val added = onMain { browser.setRating(id, HeartRating(true)) }.get(15, TimeUnit.SECONDS)
+        assertEquals(SessionResult.RESULT_SUCCESS, added.resultCode)
+        assertTrue(dashTune.server.library.byId(track.id)?.isFavorite == true)
+        assertTrue("The warm browse cache must include the newly liked track",
+            browser.childrenOf(FAVOURITES).any { it.mediaId == id })
+
+        val removed = onMain { browser.setRating(id, HeartRating(false)) }.get(15, TimeUnit.SECONDS)
+        assertEquals(SessionResult.RESULT_SUCCESS, removed.resultCode)
+        assertFalse(dashTune.server.library.byId(track.id)?.isFavorite == true)
+        assertFalse("The warm browse cache must remove the unliked track",
+            browser.childrenOf(FAVOURITES).any { it.mediaId == id })
+    }
 
     @Test
     fun playingAnAlbumReachesReadyAndPlays() {

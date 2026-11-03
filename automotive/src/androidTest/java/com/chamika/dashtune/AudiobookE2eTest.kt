@@ -147,11 +147,14 @@ class AudiobookE2eTest {
             browser.currentPosition > 1_500
         }
 
+        val path = "/UserItems/${chapter.mediaId}/UserData"
+        // Buffering may already have saved an earlier position. Wait for a new write
+        // after Pause rather than treating that earlier report as the pause result.
+        val writesBeforePause = dashTune.server.requestsTo(path).size
         onMain { browser.pause() }
 
-        val path = "/UserItems/${chapter.mediaId}/UserData"
-        awaitCondition(message = { "a UserData write for $path" }) {
-            dashTune.server.requestsTo(path).isNotEmpty()
+        awaitCondition(message = { "a UserData write after pausing for $path" }) {
+            !browser.isPlaying && dashTune.server.requestsTo(path).size > writesBeforePause
         }
 
         val body = dashTune.server.requestsTo(path).last().body
