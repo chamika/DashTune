@@ -141,6 +141,8 @@ class MediaItemFactoryTest {
         assertTrue(item.mediaMetadata.isPlayable == true)
         assertEquals(MediaMetadata.MEDIA_TYPE_MUSIC, item.mediaMetadata.mediaType)
         assertNotNull(item.localConfiguration)
+        // Keyed by track id so a cached copy plays whatever the stream URL's bitrate or host.
+        assertEquals(item.mediaId, item.localConfiguration?.customCacheKey)
     }
 
     @Test

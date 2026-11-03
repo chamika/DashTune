@@ -1,10 +1,13 @@
 package com.chamika.dashtune
 
+import android.accounts.AccountManager
 import android.app.Application
 import android.util.Log
 import androidx.preference.PreferenceManager
 import com.chamika.dashtune.Constants.LOG_TAG
+import com.chamika.dashtune.auth.JellyfinAccountManager
 import com.chamika.dashtune.settings.BrowseCategoriesMigration
+import com.chamika.dashtune.tls.CleartextPolicy
 import com.google.firebase.Firebase
 import com.google.firebase.analytics.analytics
 import com.google.firebase.crashlytics.crashlytics
@@ -18,6 +21,13 @@ class DashTuneApplication : Application() {
         // Runs before the media service builds its browse tree, so the first root the head
         // unit sees already has Home in it.
         BrowseCategoriesMigration.run(PreferenceManager.getDefaultSharedPreferences(this))
+
+        // An http server chosen before unencrypted connections needed consent keeps working.
+        try {
+            CleartextPolicy(this).allowExistingServer(JellyfinAccountManager(AccountManager.get(this)).server)
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Could not carry over the existing server's http allowance", e)
+        }
 
         // Disable Firebase collection in debug builds.
         // Wrapped in try-catch because Firebase depends on Google Play Services, which may not

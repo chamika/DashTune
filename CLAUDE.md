@@ -123,18 +123,39 @@ automotive/src/main/java/com/chamika/dashtune/
 3. `JellyfinMediaTree` builds the browsable hierarchy from user-configured categories (Latest, Favourites, Books, Playlists, Random)
 4. `MediaItemFactory` converts Jellyfin `BaseItemDto` to Media3 `MediaItem` for artists, albums, playlists, tracks, and audiobooks
 5. `AlbumArtContentProvider` serves album art via `content://` URIs so the AAOS system UI can display them
+6. Voice "play X" (Assistant's `playFromSearch`) arrives as one item with an empty media id and
+   `requestMetadata.searchQuery` (`MediaItemResolver.voiceQuery`). `pickVoiceTarget` searches
+   using the assistant's `EXTRA_MEDIA_FOCUS`/`ARTIST`/`ALBUM`/`TITLE` extras (search lists
+   artists first, so the focus matters). An artist plays its radio, a track plays and then a
+   song instant mix, and an album, playlist or book plays in full; a book resumes. A blank
+   query restores the saved queue, else shuffles the library.
 
 ### Authentication
 - Android AccountManager stores server URL + access token
 - Two auth methods: QuickConnect (polling) and username/password
 - `SignInActivity` → `ServerSignInFragment` (ping) → `CredentialsFragment` (auth)
 - On login success, sends `LOGIN_COMMAND` to service which updates API client and refreshes media tree
+- Plain http is allowed only to local hosts (private/link-local/CGNAT IPv4, ULA/link-local IPv6,
+  single-label names, `.local`/`.lan`/`.home.arpa`/`.internal`/`.ts.net`) or to a host the
+  user accepted in the "Connection not encrypted" dialog at sign-in (`tls.CleartextPolicy`).
+  `CleartextGuard` on the shared OkHttp client enforces it for API, art, streaming and
+  prefetch; the manifest still sets `usesCleartextTraffic`. The dialog comes before the ping,
+  which the guard would otherwise refuse. An http server already signed in before this policy
+  existed is allowed once at startup (`allowExistingServer`).
 
 ### Offline & Caching
 - ExoPlayer `CacheDataSource` wraps HTTP requests with disk cache (LRU eviction)
 - Cache size configurable: 100MB - 2GB (default 200MB)
 - On track change, prefetches next 5 tracks via `DownloadManager`
+- Cached audio is keyed by the track id (`customCacheKey` on the `MediaItem` and every
+  `DownloadRequest`), not the stream URL, so a cached copy plays whatever the bitrate or host
+  in the URL. Favourites share the LRU cache, so a `COMPLETED` favourite is re-queued when its
+  bytes have been evicted (`isStillQueuedOrCached`).
 - Playback position saved every 1s, restored on playback resumption
+- `PlaybackReporter` sends Jellyfin Start (when a track starts playing), Progress (every 20s, and
+  paused on pause) and Stopped (track change, end of queue, `onDestroy`) on `reportScope`. A
+  Stopped that fails offline is kept in prefs (max 50) and sent on network return or after the
+  next successful report. `playMethod` is TRANSCODE when a bitrate cap is set.
 - Room (`MediaRepository`) caches browse results. `NetworkSyncScheduler` runs `sync()` once per
   *validated* network (`NET_CAPABILITY_VALIDATED`, then a 10s settle; a network still unvalidated
   after 60s, e.g. a LAN-only travel router, gets a try anyway), when the last
@@ -150,6 +171,11 @@ automotive/src/main/java/com/chamika/dashtune/
   DAO's `@Transaction` replaces. Playlist tracks are synced; album tracks cache on first play.
 - Container children are fetched in pages of 200 (`JellyfinMediaTree.fetchAllPages`): the SDK's
   request timeout covers the whole body, so one response for a long playlist never finished.
+  The Artists/Albums letter buckets, Genres, a genre's albums, Playlists and Books page the same
+  way, so a large library is never cut off; only Latest and Random stay capped at 120.
+- A browse of a parent that is neither cached nor fetchable fails (`getChildren(failOnError =
+  true)`), so the head unit shows "Library unavailable" with Retry, not an empty page. Other
+  callers still get an empty list: playback treats "no children" as a single-file audiobook.
 - `retryOnFailure` retries refused connections and DNS failures (searching the whole cause chain,
   since the SDK wraps them), not requests that already sat through the read timeout.
 - **Never make an SDK call from the main thread.** The SDK awaits the call, then reads the response
@@ -160,7 +186,10 @@ automotive/src/main/java/com/chamika/dashtune/
 - A 401 may mean the token is dead. The tree reports it (`onUnauthorized`, since browse and Home
   swallow fetch failures); the callback then checks `/Users/Me` in the background, twice 3s
   apart, and only if both are refused drops the token and notifies the root so the head unit
-  re-browses into `ERROR_SESSION_AUTHENTICATION_EXPIRED` with the sign-in action. A check the
+  re-browses into `ERROR_SESSION_AUTHENTICATION_EXPIRED` with the sign-in action, and sends the
+  same error (with the sign-in action) to the playback screen. A 401 on an audio stream
+  (`ApiErrors.isUnauthorizedStream`) starts the same check: the player stays on the error with
+  its queue instead of skipping every track. A check the
   server passes suppresses re-checks for 30s. `storeAccount` removes any other account, since
   every getter reads the first and a token-less one left by a 401 would shadow a new sign-in. Unreachable-server failures
   (`ApiErrors.isOffline`) are breadcrumbs, not Crashlytics issues (`safeRecordApiException`).
@@ -186,6 +215,11 @@ automotive/src/main/java/com/chamika/dashtune/
   the same radius. Bump the `.r1` suffix whenever the processing changes. When there is no image
   (404, offline, nothing cached) it serves `art_placeholder` rather than throwing. A throw makes the
   host draw its own square in a random flat colour. The placeholder is never cached per item.
+  `openFile` downloads on the caller's binder thread, so downloads are capped (6 at once, 2s
+  to get a slot, 4s/6s connect/read timeouts) and it serves the placeholder at once when there
+  is no network at all. Not "no validated network": LAN-only routers never validate. Fetching
+  in the background and calling `notifyChange` was rejected because the host's image loader
+  never asks again, so tiles would stay placeholders.
 - Section title typography is also the host's. `GROUP_TITLE` is only a string, so on the Volvo
   the titles come out large (like Spotify's) and on the reference emulator they come out small.
 - The shuffle tiles are ordinary grid items whose artwork (`art_shuffle`, `art_favourites`) is a
@@ -203,7 +237,9 @@ automotive/src/main/java/com/chamika/dashtune/
 - `MediaItemFactory.forAudiobook()` creates browsable/playable items with `IS_AUDIOBOOK_KEY` metadata flag
 - Browse hierarchy: Books category → Folders/Collections → Individual books → Chapters
 - Multi-chapter audiobooks expand into ordered playlists via `expandSingleItem()` in `DashTuneSessionCallback`
-- Position saved to Jellyfin server via `itemsApi.updateItemUserData()` (UserData API) on pause/stop
+- Position saved to Jellyfin server via `itemsApi.updateItemUserData()` (UserData API) on pause/stop,
+  and on `onDestroy` if still playing. The saves run in `reportScope`, which `onDestroy` does not
+  cancel: swiping the app away pauses then stops it, and cancelling there lost the last position.
 - Position restored from server via `userLibraryApi.getItem()` → `userData.playbackPositionTicks`
 - AAOS completion status extras show progress bars on chapter items in browse UI
 - Shuffle auto-disabled when audiobook content detected, restored when switching to music
@@ -220,6 +256,12 @@ automotive/src/main/java/com/chamika/dashtune/
   message) instead of clearing the player and saving an empty queue.
 - `FocusDenialRetry` re-asks a few times when audio focus is refused right at play() (ExoPlayer
   otherwise drops playWhenReady silently); later focus losses are left alone.
+- The service's watchdog (`focusRecovery`) re-requests focus after 8s stuck in a transient loss,
+  but not while `AudioManager.mode` shows a call (`isCallInProgress`): asking then gives focus up
+  for a refusal, and no GAIN follows when the call ends. Its request goes through
+  `FocusDenialRetry.recoverFocus`, which, if refused (a call the mode check missed, an
+  assistant), asks again every 5s for up to 15 min. Only a call or assistant can refuse media
+  focus, so this never takes focus from another media app. Verify on the car with a call >10s.
 - After a process death mid-listen (no crash, no `onDestroy`; seen in the car after a network
   flap), the service logs the `ApplicationExitInfo` reason (`last_exit_reason` key) and, if the
   exit was not intentional and it was playing within 5 min (`last_playing_at`), puts the saved
