@@ -105,6 +105,9 @@ class DashTuneSessionCallback(
 
     private lateinit var repository: MediaRepository
     private val authScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Session notifications that arrive after the call that caused them has returned. */
+    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val tokenCheckLock = Any()
     private var tokenCheck: Job? = null
 
@@ -978,12 +981,25 @@ class DashTuneSessionCallback(
         return SuspendToFutureAdapter.launchFuture {
             try {
                 applyRating(mediaId, rating)
-                val favourites = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
-                    repository.refreshFavourites()
-                }
+                val librarySession = session as? MediaLibraryService.MediaLibrarySession
+                // The refresh runs in the repository's scope, so it outlives this timeout and
+                // still writes; when it is slower than that, the head unit hears about it late.
+                val refresh = repository.refreshFavouritesAsync()
+                val favourites = withTimeoutOrNull(BROWSE_TIMEOUT_MS) { refresh.await() }
                 if (favourites != null) {
-                    (session as? MediaLibraryService.MediaLibrarySession)
-                        ?.notifyChildrenChanged(FAVOURITES, favourites.size, null)
+                    librarySession?.notifyChildrenChanged(FAVOURITES, favourites.size, null)
+                } else {
+                    mainScope.launch {
+                        val late = try {
+                            refresh.await()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(LOG_TAG, "Late favourites refresh failed", e)
+                            return@launch
+                        }
+                        librarySession?.notifyChildrenChanged(FAVOURITES, late.size, null)
+                    }
                 }
                 SessionResult(SessionResult.RESULT_SUCCESS)
             } catch (e: Exception) {

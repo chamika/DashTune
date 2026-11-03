@@ -75,6 +75,30 @@ class PlaybackE2eTest {
     }
 
     @Test
+    fun anOlderFavouritesRefreshLandingLastDoesNotOverwriteANewerOne() {
+        // #60: heart, hold that refresh's answer, unheart. The held answer (taken after the
+        // heart, so it still lists the track) used to land last and put the track back.
+        browser.childrenOf(FAVOURITES)
+        val track = fixture.featuredTracks.first { !it.isFavorite }
+        val id = track.id.toString()
+
+        dashTune.server.holdNext(3_000) { url ->
+            url.queryParameterValues("filters").any { it == "IsFavorite" }
+        }
+        val heart = onMain { browser.setRating(id, HeartRating(true)) }
+        assertTrue("The heart's refresh never reached the server", dashTune.server.awaitHeldRequest())
+
+        val unheart = onMain { browser.setRating(id, HeartRating(false)) }.get(15, TimeUnit.SECONDS)
+        val hearted = heart.get(15, TimeUnit.SECONDS)
+
+        assertEquals(SessionResult.RESULT_SUCCESS, hearted.resultCode)
+        assertEquals(SessionResult.RESULT_SUCCESS, unheart.resultCode)
+        assertFalse(dashTune.server.library.byId(track.id)?.isFavorite == true)
+        assertFalse("The held, older favourites list must not overwrite the newer one",
+            browser.childrenOf(FAVOURITES).any { it.mediaId == id })
+    }
+
+    @Test
     fun playingAnAlbumReachesReadyAndPlays() {
         startAlbum()
 

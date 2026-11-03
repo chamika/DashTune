@@ -13,6 +13,7 @@ import org.jellyfin.sdk.model.api.SortOrder
 import java.io.Closeable
 import java.util.Collections
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
@@ -66,7 +67,8 @@ class FakeJellyfinServer(
 
     fun start() {
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse = handle(request)
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                holdIfArmed(request.url, handle(request))
         }
         server.start()
         baseUrl = "http://127.0.0.1:${server.port}"
@@ -90,6 +92,35 @@ class FakeJellyfinServer(
 
     fun requestsTo(pathPrefix: String): List<ServerRequest> =
         requests.filter { it.path.startsWith(pathPrefix) }
+
+    private class Hold(val delayMillis: Long, val matches: (HttpUrl) -> Boolean) {
+        val taken = CountDownLatch(1)
+    }
+
+    @Volatile
+    private var hold: Hold? = null
+
+    /**
+     * Delays the answer to the next request that [matches] by [delayMillis]. The answer is
+     * built when the request arrives, so it reflects the library at that moment and lands
+     * late: what an older response overtaken by a newer one looks like. One request only.
+     */
+    fun holdNext(delayMillis: Long, matches: (HttpUrl) -> Boolean) {
+        hold = Hold(delayMillis, matches)
+    }
+
+    /** Waits until the request armed by [holdNext] has arrived (its answer is still held). */
+    fun awaitHeldRequest(timeoutMillis: Long = 10_000): Boolean =
+        hold?.taken?.await(timeoutMillis, TimeUnit.MILLISECONDS) ?: false
+
+    private fun holdIfArmed(url: HttpUrl, response: MockResponse): MockResponse {
+        val armed = synchronized(this) {
+            hold?.takeIf { it.taken.count > 0 && it.matches(url) }?.also { it.taken.countDown() }
+        } ?: return response
+        return response.newBuilder()
+            .headersDelay(armed.delayMillis, TimeUnit.MILLISECONDS)
+            .build()
+    }
 
     /** Path segments the app hit, useful when a 501 shows up in a failure message. */
     fun unhandledPaths(): List<String> = requests.map { it.path }.distinct()

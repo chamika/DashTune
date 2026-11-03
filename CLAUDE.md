@@ -169,6 +169,12 @@ automotive/src/main/java/com/chamika/dashtune/
   cache was wiped). A complete sync replaces the whole cache except `HOME_ID` and
   `SAVED_QUEUE_ID`; a partial one replaces only the parents it re-fetched. Writes go through the
   DAO's `@Transaction` replaces. Playlist tracks are synced; album tracks cache on first play.
+- A heart/unheart re-fetches Favourites (`refreshFavouritesAsync`). Three paths write the
+  FAVOURITES rows (that refresh, sync and a cold browse), and only the most recently started
+  fetch may write: each takes `favouritesVersion` just before its GET, and an older response
+  that lands late is dropped. A sync whose favourites are older keeps the newer rows
+  (FAVOURITES joins `keepParents`). The refresh runs in the repository scope, so one slower
+  than `onSetRating`'s 8s timeout still writes and notifies the head unit late (#60).
 - Container children are fetched in pages of 200 (`JellyfinMediaTree.fetchAllPages`): the SDK's
   request timeout covers the whole body, so one response for a long playlist never finished.
   The Artists/Albums letter buckets, Genres, a genre's albums, Playlists and Books page the same
