@@ -169,6 +169,17 @@ automotive/src/main/java/com/chamika/dashtune/
   cache was wiped). A complete sync replaces the whole cache except `HOME_ID` and
   `SAVED_QUEUE_ID`; a partial one replaces only the parents it re-fetched. Writes go through the
   DAO's `@Transaction` replaces. Playlist tracks are synced; album tracks cache on first play.
+- Ratings go to the server one at a time (`ratingLock`, a `Mutex`), then
+  `refreshFavouritesAfterRating` re-fetches Favourites, cancelling any refresh still running.
+  Three paths write the FAVOURITES rows (that refresh, sync and a cold browse), ordered by
+  `favouritesVersion`, taken just before each GET: a response below `favouritesMinVersion` is
+  dropped. A rating raises that floor when its refresh starts, so everything fetched before the
+  rating is refused even if the refresh then fails, and a write raises it past itself. A sync with
+  stale favourites falls back to a partial replace: a full one would delete the children of items
+  only the newer list has. A response is also dropped if `currentAccount` changed during it, so
+  a late one cannot refill Room after sign-out. The refresh runs in the repository scope, so one
+  slower than `onSetRating`'s 8s timeout still writes and notifies late (#60). If the refresh
+  fails, Room keeps its old list until the next sync.
 - Container children are fetched in pages of 200 (`JellyfinMediaTree.fetchAllPages`): the SDK's
   request timeout covers the whole body, so one response for a long playlist never finished.
   The Artists/Albums letter buckets, Genres, a genre's albums, Playlists and Books page the same

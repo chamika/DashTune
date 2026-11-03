@@ -84,6 +84,19 @@ class JellyfinMediaTreePagingTest {
     }
 
     @Test
+    fun `a forgotten item is fetched again on its next lookup`() = runTest {
+        val id = playlistId.toString()
+        tree.getItem(id)
+        tree.getItem(id)
+        coVerify(exactly = 1) { userLibraryApi.getItem(playlistId) }
+
+        tree.forgetItems(listOf(id))
+        tree.getItem(id)
+
+        coVerify(exactly = 2) { userLibraryApi.getItem(playlistId) }
+    }
+
+    @Test
     fun `a long playlist is fetched page by page until a short page`() = runTest {
         val tracks = tracks(CHILDREN_PAGE_SIZE * 2 + 50)
         givenPage(0, tracks, total = tracks.size)

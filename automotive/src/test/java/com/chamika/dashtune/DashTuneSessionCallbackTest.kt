@@ -1,9 +1,69 @@
 package com.chamika.dashtune
 
+import androidx.media3.common.MediaItem
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class DashTuneSessionCallbackTest {
+
+    // --- Favourites notification after a rating ---
+
+    @Test
+    fun `a refresh within the timeout notifies before the wait returns`() = runBlocking {
+        val notified = mutableListOf<Int>()
+
+        DashTuneSessionCallback.notifyWhenRefreshed(
+            this, CompletableDeferred(listOf(MediaItem.EMPTY, MediaItem.EMPTY)), 5_000
+        ) { notified += it }
+
+        assertEquals(listOf(2), notified)
+    }
+
+    @Test
+    fun `a refresh slower than the timeout returns at the timeout and notifies late`() = runBlocking {
+        val refresh = CompletableDeferred<List<MediaItem>>()
+        val notified = CompletableDeferred<Int>()
+
+        DashTuneSessionCallback.notifyWhenRefreshed(this, refresh, 10) { notified.complete(it) }
+        assertFalse("Must not notify before the refresh is done", notified.isCompleted)
+
+        refresh.complete(listOf(MediaItem.EMPTY))
+        assertEquals(1, withTimeout(5_000) { notified.await() })
+    }
+
+    @Test
+    fun `a refresh replaced by a newer one returns without notifying`() = runBlocking {
+        val refresh = CompletableDeferred<List<MediaItem>>()
+        refresh.cancel()
+        var notified = false
+
+        DashTuneSessionCallback.notifyWhenRefreshed(this, refresh, 5_000) { notified = true }
+
+        assertFalse(notified)
+    }
+
+    @Test
+    fun `a released session is not notified by a late refresh`() = runBlocking {
+        val released = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val refresh = CompletableDeferred<List<MediaItem>>()
+        var notified = false
+
+        DashTuneSessionCallback.notifyWhenRefreshed(released, refresh, 10) { notified = true }
+        released.cancel()
+        refresh.complete(emptyList())
+        delay(50)
+
+        assertFalse(notified)
+    }
 
     // --- Companion constant tests ---
 

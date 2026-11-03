@@ -32,7 +32,17 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.slot
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicInteger
 import org.jellyfin.sdk.api.client.exception.TimeoutException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -103,7 +113,7 @@ class MediaRepositorySyncTest {
         val track = buildMediaItem("new-favourite", isFavorite = true)
         coEvery { tree.getChildren(FAVOURITES) } returns listOf(track)
 
-        assertEquals(listOf("new-favourite"), repository.refreshFavourites().map { it.mediaId })
+        assertEquals(listOf("new-favourite"), refresh().await().map { it.mediaId })
 
         coVerify(exactly = 1) {
             dao.replaceChildren(match { parents ->
@@ -119,7 +129,7 @@ class MediaRepositorySyncTest {
     fun `removing the last favourite replaces its cached children with an empty list`() = runTest {
         coEvery { tree.getChildren(FAVOURITES) } returns emptyList()
 
-        assertTrue(repository.refreshFavourites().isEmpty())
+        assertTrue(refresh().await().isEmpty())
 
         coVerify(exactly = 1) { dao.replaceChildren(mapOf(FAVOURITES to emptyList())) }
     }
@@ -135,9 +145,299 @@ class MediaRepositorySyncTest {
         coEvery { dao.getChildrenByParent(FAVOURITES) } returns listOf(saved)
         coEvery { tree.getChildren(FAVOURITES) } throws UnknownHostException("offline")
 
-        assertEquals(listOf("saved-favourite"), repository.refreshFavourites().map { it.mediaId })
+        assertEquals(listOf("saved-favourite"), refresh().await().map { it.mediaId })
 
         verifyNoCacheWrites()
+    }
+
+    // --- Favourites write ordering (#60) ---
+
+    /**
+     * Holds each `tree.getChildren(FAVOURITES)` call until the test answers it, in call order,
+     * and records every FAVOURITES write so Room's last state can be read back.
+     */
+    private inner class HeldFavourites {
+        private val calls = AtomicInteger()
+        private val started = Channel<Int>(Channel.UNLIMITED)
+        private val answers = List(8) { CompletableDeferred<List<MediaItem>>() }
+        val writes: MutableList<Map<String, List<CachedMediaItemEntity>>> =
+            Collections.synchronizedList(mutableListOf())
+        val replaceAllCalls: MutableList<Pair<List<CachedMediaItemEntity>, List<String>>> =
+            Collections.synchronizedList(mutableListOf())
+
+        init {
+            coEvery { tree.getChildren(FAVOURITES) } coAnswers {
+                val call = calls.getAndIncrement()
+                started.trySend(call)
+                answers[call].await()
+            }
+            coEvery { dao.replaceChildren(any()) } answers { writes += firstArg<Map<String, List<CachedMediaItemEntity>>>() }
+            coEvery { dao.replaceAllExcept(any(), any()) } answers {
+                replaceAllCalls += firstArg<List<CachedMediaItemEntity>>() to secondArg<List<String>>()
+            }
+            coEvery { dao.getChildrenByParent(FAVOURITES) } answers { roomFavourites() }
+        }
+
+        /** Waits until the next favourites fetch has reached the server. */
+        suspend fun awaitFetch(): Int = withTimeout(5_000) { started.receive() }
+
+        fun answer(call: Int, vararg ids: String) {
+            answers[call].complete(ids.map { buildMediaItem(it, isFavorite = true) })
+        }
+
+        fun fail(call: Int) {
+            answers[call].completeExceptionally(UnknownHostException("offline"))
+        }
+
+        /** What Room holds under FAVOURITES after the writes so far. */
+        fun roomFavourites(): List<CachedMediaItemEntity> = synchronized(writes) {
+            writes.lastOrNull { FAVOURITES in it }?.getValue(FAVOURITES).orEmpty()
+        }
+
+        fun roomFavouriteIds(): List<String> = roomFavourites().map { it.mediaId }
+    }
+
+    private fun refresh(ratedId: String = "track") = repository.refreshFavouritesAfterRating(ratedId)
+
+    @Test
+    fun `a newer rating cancels the refresh it supersedes, whose response never writes`() = runBlocking {
+        val held = HeldFavourites()
+
+        val heart = refresh()
+        val heartFetch = held.awaitFetch()
+        val unheart = refresh()
+        val unheartFetch = held.awaitFetch()
+        assertTrue("One running fetch per rating, not one per tap", heart.isCancelled)
+
+        held.answer(heartFetch, "other", "track")
+        held.answer(unheartFetch, "other")
+
+        assertEquals(listOf("other"), unheart.await().map { it.mediaId })
+        assertEquals(listOf("other"), held.roomFavouriteIds())
+        assertEquals(1, held.writes.size)
+    }
+
+    @Test
+    fun `refreshes that do not overlap each write`() = runBlocking {
+        val held = HeldFavourites()
+
+        val first = refresh()
+        held.answer(held.awaitFetch(), "other", "track")
+        first.await()
+        val second = refresh()
+        held.answer(held.awaitFetch(), "other")
+        second.await()
+
+        assertEquals(2, held.writes.size)
+        assertEquals(listOf("other"), held.roomFavouriteIds())
+    }
+
+    @Test
+    fun `a favourites refresh still writes when its caller gives up waiting`() = runBlocking {
+        val held = HeldFavourites()
+
+        // onSetRating waits under a timeout; a refresh that outlives it must still land.
+        val running = refresh()
+        val caller = launch(Dispatchers.IO) { running.await() }
+        val fetch = held.awaitFetch()
+        caller.cancelAndJoin()
+        held.answer(fetch, "track")
+
+        withTimeout(5_000) { while (held.writes.isEmpty()) delay(10) }
+        assertEquals(listOf("track"), held.roomFavouriteIds())
+    }
+
+    @Test
+    fun `a stale complete sync keeps the refreshed rows and replaces only what it fetched`() = runBlocking {
+        val held = HeldFavourites()
+        coEvery { tree.getActiveCategoryIds() } returns listOf(LATEST_ALBUMS, FAVOURITES)
+        coEvery { tree.getChildren(LATEST_ALBUMS) } returns listOf(
+            buildMediaItem("album-1", mediaType = MediaMetadata.MEDIA_TYPE_ALBUM)
+        )
+
+        val sync = async(Dispatchers.IO) { repository.sync() }
+        val syncFetch = held.awaitFetch()
+        val refresh = refresh()
+        held.answer(held.awaitFetch(), "other")
+        refresh.await()
+        held.answer(syncFetch, "other", "track")
+
+        assertTrue(sync.await())
+        // A full replace would delete the children of anything only the newer list contains.
+        assertTrue("A stale sync must not wipe the cache", held.replaceAllCalls.isEmpty())
+        assertEquals(setOf(LATEST_ALBUMS), held.writes.last().keys)
+        assertEquals(listOf("other"), held.roomFavouriteIds())
+    }
+
+    @Test
+    fun `a partial sync that fetched favourites before a refresh keeps the refreshed rows`() = runBlocking {
+        val held = HeldFavourites()
+        coEvery { tree.getActiveCategoryIds() } returns listOf(LATEST_ALBUMS, FAVOURITES, PLAYLISTS)
+        coEvery { tree.getChildren(LATEST_ALBUMS) } returns listOf(
+            buildMediaItem("album-1", mediaType = MediaMetadata.MEDIA_TYPE_ALBUM)
+        )
+        coEvery { tree.getChildren(PLAYLISTS) } throws RuntimeException("Network error")
+
+        val sync = async(Dispatchers.IO) { repository.sync() }
+        val syncFetch = held.awaitFetch()
+        val refresh = refresh()
+        held.answer(held.awaitFetch(), "other")
+        refresh.await()
+        held.answer(syncFetch, "other", "track")
+
+        assertTrue(sync.await())
+        assertEquals(setOf(LATEST_ALBUMS), held.writes.last().keys)
+        assertEquals(listOf("other"), held.roomFavouriteIds())
+    }
+
+    @Test
+    fun `a refresh that fetched before a sync does not overwrite the sync's favourites`() = runBlocking {
+        val held = HeldFavourites()
+        coEvery { tree.getActiveCategoryIds() } returns listOf(FAVOURITES, LATEST_ALBUMS)
+        coEvery { tree.getChildren(LATEST_ALBUMS) } throws RuntimeException("Network error")
+
+        val refresh = refresh()
+        val refreshFetch = held.awaitFetch()
+        val sync = async(Dispatchers.IO) { repository.sync() }
+        held.answer(held.awaitFetch(), "other")
+        assertTrue(sync.await())
+        held.answer(refreshFetch, "other", "track")
+        refresh.await()
+
+        assertEquals(listOf("other"), held.roomFavouriteIds())
+    }
+
+    @Test
+    fun `a cold favourites browse that fetched before a refresh does not overwrite it`() = runBlocking {
+        val held = HeldFavourites()
+
+        val browse = async(Dispatchers.IO) { repository.getChildren(FAVOURITES) }
+        val browseFetch = held.awaitFetch()
+        val refresh = refresh()
+        held.answer(held.awaitFetch(), "other")
+        refresh.await()
+        held.answer(browseFetch, "other", "track")
+
+        assertEquals(listOf("other"), browse.await().map { it.mediaId })
+        assertEquals(listOf("other"), held.roomFavouriteIds())
+    }
+
+    @Test
+    fun `a refresh that fetched before a cold browse does not overwrite what the browse wrote`() = runBlocking {
+        val held = HeldFavourites()
+
+        val refresh = refresh()
+        val refreshFetch = held.awaitFetch()
+        val browse = async(Dispatchers.IO) { repository.getChildren(FAVOURITES) }
+        held.answer(held.awaitFetch(), "other")
+        browse.await()
+        held.answer(refreshFetch, "other", "track")
+        refresh.await()
+
+        assertEquals(listOf("other"), held.roomFavouriteIds())
+        assertEquals(1, held.writes.size)
+    }
+
+    @Test
+    fun `a failed newest refresh still stops an older response from writing`() = runBlocking {
+        // The rating has reached the server, so anything fetched before it is wrong, whether or
+        // not the refresh that follows it gets through.
+        val held = HeldFavourites()
+
+        val browse = async(Dispatchers.IO) { repository.getChildren(FAVOURITES) }
+        val browseFetch = held.awaitFetch()
+        val failing = refresh()
+        val failingFetch = held.awaitFetch()
+        held.fail(failingFetch)
+        failing.await()
+        held.answer(browseFetch, "other", "track")
+        browse.await()
+
+        assertTrue("Nothing older than the rating may write", held.writes.isEmpty())
+    }
+
+    @Test
+    fun `a failed newest refresh still stops an older sync from writing favourites`() = runBlocking {
+        val held = HeldFavourites()
+        coEvery { tree.getActiveCategoryIds() } returns listOf(FAVOURITES, LATEST_ALBUMS)
+        coEvery { tree.getChildren(LATEST_ALBUMS) } returns listOf(
+            buildMediaItem("album-1", mediaType = MediaMetadata.MEDIA_TYPE_ALBUM)
+        )
+
+        val sync = async(Dispatchers.IO) { repository.sync() }
+        val syncFetch = held.awaitFetch()
+        val failing = refresh()
+        held.fail(held.awaitFetch())
+        failing.await()
+        held.answer(syncFetch, "other", "track")
+
+        assertTrue(sync.await())
+        assertTrue(held.replaceAllCalls.isEmpty())
+        assertEquals(setOf(LATEST_ALBUMS), held.writes.single().keys)
+    }
+
+    @Test
+    fun `an empty cold browse clears the rows and does not block the refresh after it`() = runBlocking {
+        val held = HeldFavourites()
+
+        val browse = async(Dispatchers.IO) { repository.getChildren(FAVOURITES) }
+        held.answer(held.awaitFetch())
+        assertTrue(browse.await().isEmpty())
+        assertEquals(mapOf(FAVOURITES to emptyList<CachedMediaItemEntity>()), held.writes.single())
+
+        val refresh = refresh()
+        held.answer(held.awaitFetch(), "track")
+        refresh.await()
+
+        assertEquals(listOf("track"), held.roomFavouriteIds())
+    }
+
+    @Test
+    fun `a rating drops the rated track's cached copy, and a dropped response drops its own`() = runBlocking {
+        val held = HeldFavourites()
+
+        val browse = async(Dispatchers.IO) { repository.getChildren(FAVOURITES) }
+        val browseFetch = held.awaitFetch()
+        val refresh = refresh("rated")
+        held.answer(held.awaitFetch(), "other")
+        refresh.await()
+        coVerify(exactly = 1) { tree.forgetItems(listOf("rated")) }
+
+        // The tree cached this response as it arrived, hearts and all, before the gate dropped it.
+        held.answer(browseFetch, "other", "track")
+        browse.await()
+
+        coVerify(exactly = 1) { tree.forgetItems(listOf("other", "track")) }
+    }
+
+    @Test
+    fun `every rated track's cached copy is dropped, even if its refresh is replaced before it starts`() = runBlocking {
+        HeldFavourites()
+
+        refresh("first")
+        refresh("second")
+        val third = refresh("third")
+
+        // Checked straight away: a refresh replaced this quickly may never get to run at all.
+        coVerify(exactly = 1) { tree.forgetItems(listOf("first")) }
+        coVerify(exactly = 1) { tree.forgetItems(listOf("second")) }
+        coVerify(exactly = 1) { tree.forgetItems(listOf("third")) }
+        third.cancel()
+    }
+
+    @Test
+    fun `a favourites response that lands after a sign-out does not repopulate Room`() = runBlocking {
+        var account: String? = "token"
+        repository = MediaRepository(dao, tree, itemFactory) { account }
+        val held = HeldFavourites()
+
+        val running = refresh()
+        val fetch = held.awaitFetch()
+        account = null
+        held.answer(fetch, "track")
+        running.await()
+
+        assertTrue(held.writes.isEmpty())
     }
 
     /** Every sync write goes through one of the two transactional replaces; nothing else may touch the cache. */
@@ -262,9 +562,14 @@ class MediaRepositorySyncTest {
         coEvery { tree.getActiveCategoryIds() } returns listOf(FAVOURITES)
         coEvery { tree.getChildren(FAVOURITES) } returns listOf(shuffle)
 
+        val written = slot<List<CachedMediaItemEntity>>()
+
         assertTrue(repository.sync())
 
         coVerify(exactly = 0) { tree.getChildren(shuffle.mediaId) }
+        // With no newer favourites fetch, a complete sync rewrites Favourites like any section.
+        coVerify { dao.replaceAllExcept(capture(written), listOf(HOME, SAVED_QUEUE)) }
+        assertEquals(listOf(shuffle.mediaId to FAVOURITES), written.captured.map { it.mediaId to it.parentId })
     }
 
     @Test

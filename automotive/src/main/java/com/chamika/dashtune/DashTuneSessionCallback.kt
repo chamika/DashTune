@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.annotation.OptIn
 import androidx.concurrent.futures.SuspendToFutureAdapter
 import androidx.core.content.edit
+import androidx.media3.common.Player
 import androidx.media3.common.C
 import androidx.media3.common.HeartRating
 import androidx.media3.common.MediaItem
@@ -44,13 +45,17 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.api.client.ApiClient
@@ -101,10 +106,45 @@ class DashTuneSessionCallback(
 
         /** After the server accepts the token on a check, further 401s go unchecked this long. */
         internal const val TOKEN_OK_TTL_MS = 30_000L
+
+        /**
+         * Tells the head unit once [refresh] is done, waiting at most [timeoutMs] for that. A
+         * refresh that takes longer still notifies from [scope]; one replaced by a newer refresh
+         * says nothing, since the newer one will.
+         */
+        internal suspend fun notifyWhenRefreshed(
+            scope: CoroutineScope,
+            refresh: Deferred<List<MediaItem>>,
+            timeoutMs: Long,
+            notify: (childCount: Int) -> Unit
+        ) {
+            val notified = scope.launch {
+                val favourites = try {
+                    refresh.await()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(LOG_TAG, "Favourites refresh failed", e)
+                    return@launch
+                }
+                notify(favourites.size)
+            }
+            withTimeoutOrNull(timeoutMs) { notified.join() }
+        }
     }
 
     private lateinit var repository: MediaRepository
     private val authScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Session notifications that arrive after the call that caused them has returned. */
+    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /**
+     * One rating at a time, so a quick heart then unheart reaches the server in the order they
+     * were tapped. A Mutex, not a single-lane dispatcher: a lane is given up at the first
+     * suspension, and the rating call suspends on the network.
+     */
+    private val ratingLock = Mutex()
     private val tokenCheckLock = Any()
     private var tokenCheck: Job? = null
 
@@ -127,6 +167,11 @@ class DashTuneSessionCallback(
 
     @Volatile
     private var homeChildCount = 0
+
+    /** The session is going away; nothing should be sent to it from here on. */
+    fun release() {
+        mainScope.cancel()
+    }
 
     fun invalidateCache() {
         synchronized(initLock) {
@@ -183,7 +228,7 @@ class DashTuneSessionCallback(
 
                 val itemFactory = MediaItemFactory(service, jellyfinApi, artSize)
                 val tree = JellyfinMediaTree(service, jellyfinApi, itemFactory, ::onTokenRejected)
-                repository = MediaRepository(mediaCacheDao, tree, itemFactory)
+                repository = MediaRepository(mediaCacheDao, tree, itemFactory) { accountManager.token }
                 resolver = MediaItemResolver(repository)
             }
         }
@@ -968,31 +1013,46 @@ class DashTuneSessionCallback(
         Log.i(LOG_TAG, "onSetRating ${rating.isHeart}")
         ensureTreeInitialized()
 
-        val item = session.player.currentMediaItem
-        item?.let {
-            val metadata = it.mediaMetadata.buildUpon().setUserRating(rating).build()
-            val mediaItem = it.buildUpon().setMediaMetadata(metadata).build()
-            session.player.replaceMediaItem(session.player.currentMediaItemIndex, mediaItem)
-        }
+        // A controller can rate an item from a browse list while another track plays.
+        val player = session.player
+        val rated = player.currentMediaItem?.takeIf { it.mediaId == mediaId }
+        val previousRating = rated?.mediaMetadata?.userRating
+        if (rated != null) setQueuedRating(player, mediaId, rating)
 
         return SuspendToFutureAdapter.launchFuture {
             try {
-                applyRating(mediaId, rating)
-                val favourites = withTimeoutOrNull(BROWSE_TIMEOUT_MS) {
-                    repository.refreshFavourites()
+                val refresh = ratingLock.withLock {
+                    applyRating(mediaId, rating)
+                    repository.refreshFavouritesAfterRating(mediaId)
                 }
-                if (favourites != null) {
+                notifyWhenRefreshed(mainScope, refresh, BROWSE_TIMEOUT_MS) { childCount ->
                     (session as? MediaLibraryService.MediaLibrarySession)
-                        ?.notifyChildrenChanged(FAVOURITES, favourites.size, null)
+                        ?.notifyChildrenChanged(FAVOURITES, childCount, null)
                 }
                 SessionResult(SessionResult.RESULT_SUCCESS)
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to set rating for $mediaId", e)
                 FirebaseUtils.safeSetCustomKey("failed_operation", "set_rating")
                 FirebaseUtils.safeRecordException(e)
+                // Nothing reached the server, so the heart must not stay filled. A newer tap on
+                // the same track has already replaced this rating and is left alone.
+                if (rated != null) setQueuedRating(player, mediaId, previousRating, onlyIfRated = rating)
                 SessionResult(SessionError.ERROR_UNKNOWN)
             }
         }
+    }
+
+    /** Rewrites the rating of [mediaId] in the queue, wherever the player has got to by now. */
+    private fun setQueuedRating(player: Player, mediaId: String, rating: Rating?, onlyIfRated: Rating? = null) {
+        val index = if (player.currentMediaItem?.mediaId == mediaId) {
+            player.currentMediaItemIndex
+        } else {
+            (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId == mediaId }
+        } ?: return
+        val item = player.getMediaItemAt(index)
+        if (onlyIfRated != null && item.mediaMetadata.userRating != onlyIfRated) return
+        val metadata = item.mediaMetadata.buildUpon().setUserRating(rating).build()
+        player.replaceMediaItem(index, item.buildUpon().setMediaMetadata(metadata).build())
     }
 
     /** False until a browser or command has created the media tree. */
