@@ -2,7 +2,12 @@ package com.chamika.dashtune.signin
 
 import android.content.ComponentName
 import android.os.Bundle
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.lifecycle.ViewModelProvider
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
@@ -22,7 +27,20 @@ class SignInActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_sign_in)
+
+        val container = findViewById<View>(R.id.sign_in_container)
+        ViewCompat.setOnApplyWindowInsetsListener(container) { view, insets ->
+            val safeArea = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or
+                    WindowInsetsCompat.Type.displayCutout() or
+                    WindowInsetsCompat.Type.ime()
+            )
+            view.updatePadding(safeArea.left, safeArea.top, safeArea.right, safeArea.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(container)
 
         viewModel = ViewModelProvider(this)[SignInViewModel::class.java]
 
@@ -47,8 +65,10 @@ class SignInActivity : AppCompatActivity() {
             }
         }
 
-        supportFragmentManager.beginTransaction()
-            .add(R.id.sign_in_container, ServerSignInFragment())
-            .commit()
+        if (savedInstanceState == null) {
+            supportFragmentManager.beginTransaction()
+                .add(R.id.sign_in_container, ServerSignInFragment())
+                .commit()
+        }
     }
 }

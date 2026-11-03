@@ -2,11 +2,15 @@ package com.chamika.dashtune.signin
 
 import android.os.Bundle
 import android.text.TextUtils
+import android.text.method.HideReturnsTransformationMethod
+import android.text.method.PasswordTransformationMethod
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -49,6 +53,28 @@ class CredentialsFragment : Fragment() {
         errorText = view.findViewById(R.id.error_text)
         quickConnectCode = view.findViewById(R.id.quickconnect_code)
         quickConnectProgressBar = view.findViewById(R.id.quickconnect_progressbar)
+
+        view.findViewById<CheckBox>(R.id.show_password).setOnCheckedChangeListener { _, checked ->
+            val start = passwordInput.selectionStart
+            val end = passwordInput.selectionEnd
+            passwordInput.transformationMethod = if (checked) {
+                HideReturnsTransformationMethod.getInstance()
+            } else {
+                PasswordTransformationMethod.getInstance()
+            }
+            if (start >= 0 && end >= 0) {
+                passwordInput.setSelection(start, end)
+            }
+        }
+
+        passwordInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                loginButton.performClick()
+                true
+            } else {
+                false
+            }
+        }
 
         viewModel.startQuickConnect(server)
 
