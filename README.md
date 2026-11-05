@@ -6,7 +6,7 @@ A fully-featured Jellyfin music and audiobook player for Android Automotive OS (
 
 ## Trailer
 
-[![DashTune trailer](https://img.youtube.com/vi/e2Kbul_xeHM/maxresdefault.jpg)](https://www.youtube.com/watch?v=e2Kbul_xeHM)
+[![DashTune trailer](design/dashtune-trailer.gif)](https://www.youtube.com/watch?v=e2Kbul_xeHM)
 
 ## Overview
 
@@ -16,43 +16,57 @@ DashTune brings the complete Jellyfin music library experience to your car's inf
 
 ### 🎵 Music Streaming & Playback
 - **Media3 ExoPlayer** - Modern, high-performance audio playback
-- **Configurable Browse Categories** - Choose 2-4 categories from Latest, Favourites, Books, Playlists, Random
-- **Search** - Find artists, albums, playlists, and tracks
+- **Home Tab** - Titled rows (Continue listening, Made for you, New for you, Jump back in, Mixes) of tiles that each start a long queue, plus shuffle tiles
+- **Configurable Browse Categories** - Choose 2-4 tabs from Home, Latest, Favourites, Books, Playlists, Random, Folders, Artists, Albums, Genres
+- **Search** - Find artists, albums, playlists, books, and tracks
+- **Voice Control** - "Play X on DashTune" plays an artist radio, a track, an album, a playlist or a book; "Play DashTune" restores your saved queue
 - **Playback Controls** - Play, pause, skip, seek with shuffle and repeat modes
-- **State Persistence** - Automatically resume where you left off
+- **State Persistence** - Resume where you left off after an app restart or device reboot, with your queue, position, shuffle and repeat modes restored
+- **Playback Recovery** - Music returns after a long phone call, and if the system kills the app mid-listen, the queue comes back paused and ready to resume
 
 ### 📚 Audiobook Support
-- **Browsable Library** - Books appear as a top-level category with folder hierarchy
+- **Browsable Library** - Books appear as a top-level category with folder hierarchy (collections → books → chapters)
 - **Multi-Chapter Playback** - Chapters play as an ordered playlist with next/previous navigation
-- **Server-Synced Position** - Playback position saved to Jellyfin server on pause/stop
+- **Server-Synced Position** - Playback position saved to Jellyfin server every 30 seconds during playback and on pause/stop
 - **Resume Anywhere** - Resume from saved position after app restart or on another device
 - **Progress Indicators** - AAOS completion status shows read progress on chapter items
-- **Auto-Disable Shuffle** - Shuffle automatically turns off for audiobook playback
+- **Auto-Disable Shuffle** - Shuffle automatically turns off for audiobook playback and is restored when you switch back to music
 
 ### 📥 Offline Playback
-- **Smart Caching** - Automatic caching of streamed tracks (configurable size: 100MB - 2GB)
-- **Prefetch Next Tracks** - Downloads next 5 tracks in queue respecting shuffle/repeat
+- **Smart Caching** - Automatic caching of streamed tracks (configurable size: 100 MB to 10 GB, or Unlimited)
+- **Prefetch Next Tracks** - Downloads upcoming tracks in the queue, respecting shuffle/repeat (Off, 3, 5, 10, 15 or 20; default 5)
+- **Cache Favourites** - Optionally pre-download all favourite songs for offline playback
+- **Offline Browsing** - Library data is cached locally and synced in the background, so you can still browse without a connection
 - **DownloadManager Integration** - Efficient background downloads with 3 parallel connections
-- **LRU Cache Eviction** - Automatically manages storage by removing least recently used tracks
+- **LRU Cache Eviction** - Automatically manages storage by removing least recently used tracks (unless the cache size is Unlimited)
 
 ### 🔐 Authentication
 - **QuickConnect** - Pair with Jellyfin server using a simple code
 - **Username/Password** - Traditional login support
 - **Android AccountManager** - Secure token storage and management
-- **Multi-Server Support** - Switch between different Jellyfin servers
+- **Self-Hosted Servers** - Approve a certificate Android rejects after checking its fingerprint, and manage approved certificates in Settings
+- **Protected Plain HTTP** - http is only allowed to local hosts, or to a host you accept in a warning at sign-in
+- **One Account at a Time** - To switch servers, sign out and sign back in (signing out clears the cached library and artwork)
 
 ### 🎨 AAOS Integration
 - **Native Media UI** - Integrated with Android Automotive media player
 - **Album Art** - ContentProvider-based album art delivery with disk caching
-- **Scrobbling** - Automatic playback tracking to Jellyfin
+- **Scrobbling** - Reports playback start, progress, pauses and stops to Jellyfin; stops that happen offline are sent later
 - **Favorites** - Heart/unheart tracks with HeartRating API
 - **Dark Theme** - Optimized for in-car viewing with high contrast
 
 ### ⚙️ Settings
 - **Bitrate Selection** - Direct stream or transcode (320/256/192/160/128 kbps)
-- **Cache Size** - Configure offline storage (100MB/200MB/500MB/1GB/2GB)
+- **Cache Size** - Configure offline storage (100 MB/200 MB/500 MB/1 GB/2 GB/5 GB/10 GB/Unlimited)
+- **Offline Song Count** - How many upcoming tracks to prefetch (Off/3/5/10/15/20)
+- **Cache Favourites** - Pre-download all favourite songs for offline playback
 - **Browse Categories** - Choose which categories appear in the media player (min 2, max 4)
-- **Version Info** - Display app and Jellyfin SDK versions
+- **Sync Library** - Run a sync on demand and see when the library last synced
+- **Clear Library Cache** - Remove cached library data and artwork (downloaded music is kept)
+- **Trusted Certificates** - Review and remove certificates you approved during sign-in
+- **Force Exit** - Stop playback and shut down DashTune
+- **Version Info** - Display app and Jellyfin API versions
+- **Sign Out** - Sign out of your Jellyfin server
 
 ## Tech Stack
 
@@ -66,6 +80,7 @@ DashTune brings the complete Jellyfin music library experience to your car's inf
 - **HTTP Client:** OkHttp 5.3.2
 - **Database:** Room (media cache, parent relationships)
 - **UI:** XML layouts with ViewBinding
+- **Crash & Usage Reporting:** Firebase Analytics and Crashlytics (disabled in debug builds)
 - **Caching:** Guava cache for metadata, SimpleCache for media files
 
 ## Project Structure
@@ -81,11 +96,12 @@ DashTune/
 │       │   ├── AlbumArtContentProvider.kt      # Album art delivery
 │       │   ├── CommandButtons.kt               # Shuffle/Repeat buttons
 │       │   ├── auth/                           # Authentication & account management
-│       │   ├── data/                           # MediaRepository, Room DB (cache + position)
+│       │   ├── data/                           # MediaRepository, Room DB (browse cache, saved queue)
 │       │   ├── di/                             # Hilt dependency injection
 │       │   ├── media/                          # Media tree & item factory
 │       │   ├── settings/                       # Settings UI
-│       │   └── signin/                         # Sign-in flow (server + credentials)
+│       │   ├── signin/                         # Sign-in flow (server + credentials)
+│       │   └── tls/                            # Trusted certificates and plain http policy
 │       └── res/
 │           ├── drawable/                       # Vector icons for categories
 │           ├── layout/                         # Sign-in & settings layouts
@@ -98,7 +114,7 @@ DashTune/
 ## Building
 
 ### Prerequisites
-- Android Studio Hedgehog (2023.1.1) or later
+- The latest stable Android Studio (the project uses AGP 9.4.1)
 - JDK 17
 - Android SDK with API 36
 
@@ -126,7 +142,8 @@ Jellyfin server that starts inside the app's own process, so they are fully self
 
 ### Unit tests
 
-Robolectric + MockK, no device or emulator required. This is what CI runs on every pull request:
+Robolectric + MockK, no device or emulator required. CI runs these, along with the end-to-end
+suite, on every pull request:
 
 ```bash
 ./gradlew :automotive:testDebugUnitTest
@@ -186,39 +203,27 @@ The app will appear in the car's media app list.
 ## Initial Setup
 
 1. **Launch DashTune** from the AAOS media apps
-2. **Enter Server URL** - Your Jellyfin server address (e.g., `https://jellyfin.myserver.com:8096`)
-3. **Authenticate** - Use QuickConnect or username/password
-4. **Browse & Play** - Start streaming your music!
+2. **Enter Server URL** - Your Jellyfin server address (e.g., `https://jellyfin.example.com`, or `http://192.168.1.10:8096` on your local network)
+3. **Review Any Warning** - You'll be asked to confirm a certificate Android doesn't trust, or plain http to a non-local host
+4. **Authenticate** - Use QuickConnect or username/password
+5. **Browse & Play** - Start streaming your music!
 
-## Features in Detail
+## Browse Categories
 
-### Browse Categories
-- **Latest** - Recently added albums
-- **Favourites** - Your hearted tracks, albums, and artists
-- **Books** - Audiobooks with folder hierarchy and chapter navigation
-- **Playlists** - All your Jellyfin playlists
-- **Random** - Shuffled album discovery
+| Category | What it shows |
+|----------|---------------|
+| **Home** | Titled rows of tiles that each start a long queue |
+| **Latest** | Recently added albums |
+| **Favourites** | Your hearted tracks, albums, artists, and books |
+| **Books** | Audiobooks with folder hierarchy and chapter navigation |
+| **Playlists** | All your Jellyfin playlists |
+| **Random** | Shuffled album discovery |
+| **Folders** | Your library's folders, with recursive shuffle |
+| **Artists** | Album artists, A-Z |
+| **Albums** | All albums, A-Z |
+| **Genres** | Albums grouped by genre |
 
-Categories are configurable in Settings (min 2, max 4). Defaults: Latest, Favourites, Books, Playlists.
-
-### Audiobook Playback
-- Browse audiobooks in a folder hierarchy (collections → books → chapters)
-- Multi-chapter audiobooks play as ordered playlists
-- Playback position synced to Jellyfin server via UserData API
-- Resume from last position after app restart
-- Progress indicators show completion percentage in browse UI
-- Shuffle auto-disabled during audiobook playback (restored when switching to music)
-
-### Offline Mode
-- Tracks are automatically cached as you stream
-- Next 5 tracks in queue are prefetched in the background
-- Works seamlessly even when network is unavailable
-- Configure cache size in Settings
-
-### Playback State Persistence
-- Current playlist, position, and track are saved
-- Shuffle and repeat modes are preserved
-- Resume playback after app restart or device reboot
+Categories are configurable in Settings (min 2, max 4). Defaults: Home, Favourites, Books, Playlists.
 
 ## Dependencies
 
@@ -230,7 +235,8 @@ Key libraries:
 - `com.squareup.okhttp3:okhttp:5.3.2`
 - `androidx.preference:preference-ktx:1.2.1`
 - `androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0`
-- `androidx.room:room-runtime` (media cache database)
+- `androidx.room:room-runtime:2.7.1` (media cache database)
+- `com.google.firebase:firebase-bom:34.9.0` (Analytics and Crashlytics)
 
 See `gradle/libs.versions.toml` for complete dependency list.
 
@@ -251,11 +257,18 @@ See `gradle/libs.versions.toml` for complete dependency list.
 - Verify server URL is correct and reachable
 - Check that Jellyfin server allows remote connections
 - For QuickConnect: ensure it's enabled in Jellyfin server settings
+- For a self-signed certificate: check the fingerprint against your server, then choose **Trust this certificate**
+- For plain http to a non-local host: use https if you can, or accept the **Connection not encrypted** warning
 
 **Playback issues:**
 - Check network connectivity
 - Try different bitrate settings
 - Verify audio codec compatibility (app supports: FLAC, MP3, M4A, AAC, OGG)
+
+## Privacy
+
+Release builds send anonymous usage data and crash reports to Firebase; debug builds don't. See the
+[privacy policy](PRIVACY-POLICY.md) for details.
 
 ## Contributing
 
@@ -264,9 +277,13 @@ Contributions are welcome! Please feel free to submit pull requests or open issu
 Before opening a pull request, please run the [tests](#testing). CI runs the unit tests and the
 end-to-end suite (on an automotive emulator) on every pull request.
 
+By contributing, you agree that your contributions are licensed under the Apache License 2.0.
+
 ## License
 
-TBD
+Copyright 2026 Chamika and the DashTune contributors.
+
+Licensed under the [Apache License 2.0](LICENSE).
 
 ## Acknowledgments
 
