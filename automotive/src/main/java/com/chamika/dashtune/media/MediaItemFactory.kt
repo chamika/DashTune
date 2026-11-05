@@ -33,6 +33,7 @@ class MediaItemFactory(
         const val ROOT_ID = "ROOT_ID"
         const val LATEST_ALBUMS = "LATEST_ALBUMS_ID"
         const val RANDOM_ALBUMS = "RANDOM_ALBUMS_ID"
+        const val RANDOM_TRACKS = "RANDOM_TRACKS_ID"
         const val FAVOURITES = "FAVOURITES_ID"
         const val PLAYLISTS = "PLAYLISTS_ID"
         const val BOOKS = "BOOKS_ID"
@@ -64,6 +65,7 @@ class MediaItemFactory(
         const val PARENT_KEY = "PARENT_KEY"
         const val IS_AUDIOBOOK_KEY = "is_audiobook"
         const val IS_FOLDER_KEY = "is_folder_browse"
+        const val TRACK_ARTIST_KEY = "track_artist"
 
         /** Alphabet index shown under Artists and Albums; "#" collects non-alphabetic names. */
         val LETTERS: List<String> = listOf("#") + ('A'..'Z').map(Char::toString)
@@ -128,11 +130,21 @@ class MediaItemFactory(
     }
 
     fun randomAlbums(): MediaItem {
-        return albumCategory(RANDOM_ALBUMS, "Random", "ic_casino")
+        return albumCategory(RANDOM_ALBUMS, context.getString(R.string.random_albums), "ic_casino")
+    }
+
+    fun randomTracks(): MediaItem {
+        return albumCategory(RANDOM_TRACKS, context.getString(R.string.random_tracks), "ic_casino",
+            mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_MIXED,
+            contentStyle = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM)
     }
 
     fun favourites(): MediaItem {
         val extras = Bundle()
+        extras.putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+            MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+        )
         extras.putInt(
             MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
             MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
@@ -641,7 +653,13 @@ class MediaItemFactory(
 
         val audioStream = streamingUri(item.id.toString())
 
+        val artist = item.artists?.filter { it.isNotBlank() }?.joinToString(", ")
+            ?.takeIf { it.isNotBlank() }
+            ?: item.artistItems?.mapNotNull { it.name?.takeIf(String::isNotBlank) }?.joinToString(", ")
+                ?.takeIf { it.isNotBlank() }
+            ?: item.albumArtist
         val extras = Bundle()
+        extras.putString(TRACK_ARTIST_KEY, artist)
         if (group != null) {
             extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
         }
@@ -661,6 +679,7 @@ class MediaItemFactory(
 
         val metadata = MediaMetadata.Builder()
             .setTitle(item.name)
+            .setArtist(artist)
             .setAlbumArtist(item.albumArtist)
             .setIsBrowsable(false)
             .setIsPlayable(true)

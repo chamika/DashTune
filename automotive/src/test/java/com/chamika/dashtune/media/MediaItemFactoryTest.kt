@@ -146,6 +146,17 @@ class MediaItemFactoryTest {
     }
 
     @Test
+    fun `track artist is used instead of the compilation album artist`() {
+        val dto = baseItem(BaseItemKind.AUDIO).copy(
+            artists = listOf("Track Artist", "Guest"), albumArtist = "Various Artists"
+        )
+        val metadata = factory.create(dto).mediaMetadata
+        assertEquals("Track Artist, Guest", metadata.artist)
+        assertEquals("Various Artists", metadata.albumArtist)
+        assertEquals("Track Artist, Guest", metadata.extras?.getString(MediaItemFactory.TRACK_ARTIST_KEY))
+    }
+
+    @Test
     fun `create audiobook has audiobook flag and streaming URI`() {
         val item = factory.create(baseItem(BaseItemKind.AUDIO_BOOK))
 

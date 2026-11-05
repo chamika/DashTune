@@ -10,6 +10,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.HOME
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_TRACKS
 
 /**
  * The single source of truth for the root browse tabs: which preference key maps to which
@@ -42,7 +43,8 @@ object BrowseCategories {
         "folders" to FOLDERS,
         "artists" to ARTISTS,
         "albums" to ALBUMS,
-        "genres" to GENRES
+        "genres" to GENRES,
+        "random_tracks" to RANDOM_TRACKS
     )
 
     val DEFAULTS: Set<String> = setOf("home", "favourites", "books", "playlists")

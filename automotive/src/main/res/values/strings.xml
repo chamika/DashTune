@@ -88,4 +88,6 @@
     <string name="retry">Retry</string>
     <string name="library_unavailable">Library unavailable. Check your connection and retry.</string>
     <string name="media_unavailable">Couldn\'t load this. Check your connection and try again.</string>
+    <string name="random_albums">Random albums</string>
+    <string name="random_tracks">Random tracks</string>
 </resources>
