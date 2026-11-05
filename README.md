@@ -277,9 +277,13 @@ Contributions are welcome! Please feel free to submit pull requests or open issu
 Before opening a pull request, please run the [tests](#testing). CI runs the unit tests and the
 end-to-end suite (on an automotive emulator) on every pull request.
 
+By contributing, you agree that your contributions are licensed under the Apache License 2.0.
+
 ## License
 
-TBD
+Copyright 2026 Chamika and the DashTune contributors.
+
+Licensed under the [Apache License 2.0](LICENSE).
 
 ## Acknowledgments
 
