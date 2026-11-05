@@ -6,7 +6,7 @@ A fully-featured Jellyfin music and audiobook player for Android Automotive OS (
 
 ## Trailer
 
-[![DashTune trailer](https://img.youtube.com/vi/e2Kbul_xeHM/maxresdefault.jpg)](https://www.youtube.com/watch?v=e2Kbul_xeHM)
+[![DashTune trailer](design/dashtune-trailer.gif)](https://www.youtube.com/watch?v=e2Kbul_xeHM)
 
 ## Overview
 
