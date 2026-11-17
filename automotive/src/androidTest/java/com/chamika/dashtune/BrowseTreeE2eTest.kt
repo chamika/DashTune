@@ -97,7 +97,7 @@ class BrowseTreeE2eTest {
 
         assertEquals(
             setOf(
-                fixture.favouriteTrack.id.toString(),
+                "$FAVOURITES/${fixture.favouriteTrack.id}",
                 fixture.favouriteAlbum.id.toString(),
                 fixture.favouriteArtist.id.toString(),
             ),

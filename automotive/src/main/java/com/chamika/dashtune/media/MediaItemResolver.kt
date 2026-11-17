@@ -93,7 +93,7 @@ class MediaItemResolver(
                 return@forEach
             }
 
-            val item = repository.getItem(it.mediaId)
+            val item = repository.getItem(TrackList.trackId(it.mediaId))
             val isAudiobook = item.mediaMetadata.extras?.getBoolean(IS_AUDIOBOOK_KEY) == true
             val isExpandable = (item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_ALBUM ||
                     item.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_PLAYLIST) &&
@@ -190,6 +190,7 @@ class MediaItemResolver(
         val mediaId = mediaItems[0].mediaId
         // A voice request has no id at all; resolveMediaItems turns its query into a queue.
         if (mediaId.isEmpty()) return false
+        if (TrackList.parentId(mediaId) != null) return true
         // Home action tiles and prefixed albums have no Jellyfin item behind their id, so
         // there is no parent to expand — resolveMediaItems handles them itself.
         if (isHomeActionId(mediaId) || mediaId.startsWith(NEW_ALBUM_PREFIX)) return false
@@ -217,7 +218,10 @@ class MediaItemResolver(
     }
 
     suspend fun expandSingleItem(item: MediaItem): List<MediaItem> {
-        val parentId = repository.getItem(item.mediaId).mediaMetadata.extras?.getString(PARENT_KEY)
+        val listParentId = TrackList.parentId(item.mediaId)
+        val parentId = listParentId
+            ?: item.mediaMetadata.extras?.getString(PARENT_KEY)
+            ?: repository.getItem(item.mediaId).mediaMetadata.extras?.getString(PARENT_KEY)
             ?: repository.getContentParentId(item.mediaId)
             ?: return listOf(item)
         val children = repository.getChildren(parentId)
@@ -227,6 +231,11 @@ class MediaItemResolver(
             // start playback on the wrong track. Drop it so tapping a song plays that song
             // and its actual siblings in order.
             .filterNot { isShuffleId(it.mediaId) }
+            .filter { listParentId == null || TrackList.isSong(it) }
+        // A track may have been removed from Favourites since the host displayed it.
+        if (listParentId != null && children.none {
+                TrackList.trackId(it.mediaId) == TrackList.trackId(item.mediaId)
+            }) return resolveMediaItems(listOf(item))
         return resolveMediaItems(children)
     }
 }

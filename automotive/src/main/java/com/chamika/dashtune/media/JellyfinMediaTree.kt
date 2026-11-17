@@ -27,6 +27,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.LETTER_BUCKET_PREFI
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RADIO_ARTIST_PREFIX
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_TRACKS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.ROOT_ID
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FAVOURITES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.SHUFFLE_FOLDER_PREFIX
@@ -162,6 +163,7 @@ class JellyfinMediaTree(
                 id == ROOT_ID -> itemFactory.rootNode()
                 id == LATEST_ALBUMS -> itemFactory.latestAlbums()
                 id == RANDOM_ALBUMS -> itemFactory.randomAlbums()
+                id == RANDOM_TRACKS -> itemFactory.randomTracks()
                 id == FAVOURITES -> itemFactory.favourites()
                 id == PLAYLISTS -> itemFactory.playlists()
                 id == BOOKS -> itemFactory.books()
@@ -246,6 +248,7 @@ class JellyfinMediaTree(
             id == HOME -> homeSections.build(HomeLayout.tilesPerRow(context))
             id == LATEST_ALBUMS -> getLatestAlbums()
             id == RANDOM_ALBUMS -> getRandomAlbums()
+            id == RANDOM_TRACKS -> getRandomTracks()
             id == FAVOURITES -> getFavourite()
             id == PLAYLISTS -> getPlaylists()
             id == BOOKS -> getBooks()
@@ -390,6 +393,9 @@ class JellyfinMediaTree(
             item
         }
     }
+
+    private suspend fun getRandomTracks(): List<MediaItem> =
+        getLibraryShuffled().take(MAX_ITEMS)
 
     private suspend fun getPlaylists(): List<MediaItem> = fetchAllPages { startIndex ->
         retryOnFailure {

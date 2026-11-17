@@ -13,6 +13,7 @@ import com.chamika.dashtune.media.MediaItemFactory.Companion.GENRES
 import com.chamika.dashtune.media.MediaItemFactory.Companion.LATEST_ALBUMS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.PLAYLISTS
 import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_ALBUMS
+import com.chamika.dashtune.media.MediaItemFactory.Companion.RANDOM_TRACKS
 import io.mockk.mockk
 import org.jellyfin.sdk.api.client.ApiClient
 import org.junit.Assert.assertEquals
@@ -77,6 +78,15 @@ class JellyfinMediaTreeTest {
         assertTrue(ids.contains(LATEST_ALBUMS))
         assertTrue(ids.contains(FAVOURITES))
         assertTrue(ids.contains(RANDOM_ALBUMS))
+    }
+
+    @Test
+    fun `random albums preference is preserved and random tracks can be selected separately`() {
+        PreferenceManager.getDefaultSharedPreferences(context).edit()
+            .putStringSet("browse_categories", setOf("random", "random_tracks"))
+            .commit()
+
+        assertEquals(listOf(RANDOM_ALBUMS, RANDOM_TRACKS), tree.getActiveCategoryIds())
     }
 
     @Test
